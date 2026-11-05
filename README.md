@@ -6,6 +6,15 @@ The platform is designed around **uncompromising correctness and database-enforc
 
 ---
 
+## Technical Documentation Deliverables
+
+For in-depth architectural analysis and deployment operations, refer to the documentation guides located in the [`docs/`](docs/) directory:
+
+- 📄 **[SLOTBOOK_ARCHITECTURE.pdf](docs/SLOTBOOK_ARCHITECTURE.pdf)**: Comprehensive 10-page Architecture Specification covering system architecture, relational database ER design, immutable booking lifecycle, PostgreSQL GiST exclusion & row-level locking concurrency controls, idempotency semantics, IANA timezone & DST handling, REST API contracts, Docker architecture, and automated test reliability evidence.
+- 🐳 **[DOCKER_SETUP_AND_RUN_GUIDE.md](docs/DOCKER_SETUP_AND_RUN_GUIDE.md)**: Production-grade operator's guide for Windows 11 & WSL 2 Arch Linux detailing prerequisites, environment configuration, Docker Compose lifecycle coordination, background execution, database log streaming, psql shell access, demo URLs, test execution, and troubleshooting.
+
+---
+
 ## 1. Project Overview
 
 Slotbook provides three primary surfaces:
