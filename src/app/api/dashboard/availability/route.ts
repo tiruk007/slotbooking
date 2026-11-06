@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth";
 import { getPool, withTransaction } from "@/db";
 import { isValidIanaZone } from "@/lib/timezone";
 import { availabilityRuleSchema, dateOverrideSchema } from "@/lib/validations";
+import { NotificationService } from "@/lib/notification-service";
 import { apiSuccess, apiError } from "@/lib/api-utils";
 import { AppError } from "@/lib/booking-service";
 import { z } from "zod";
@@ -13,6 +14,8 @@ const updateAvailabilitySchema = z.object({
   homeTimezone: z.string().optional(),
   rules: z.array(availabilityRuleSchema),
   overrides: z.array(dateOverrideSchema),
+  confirmCancellation: z.boolean().optional(),
+  cancellationReason: z.string().optional(),
 });
 
 export async function GET() {
@@ -75,6 +78,42 @@ export async function PUT(request: NextRequest) {
 
     const pool = getPool();
 
+    // Find all unavailable overrides (days off)
+    const unavailableDates = validated.overrides
+      .filter((o) => !o.isAvailable)
+      .map((o) => o.overrideDate);
+
+    let affectedBookings: any[] = [];
+    if (unavailableDates.length > 0) {
+      const affectedRes = await pool.query(
+        `SELECT b.id, b.guest_name, b.guest_email, b.start_at, b.host_local_date, e.name as event_name
+         FROM bookings b
+         JOIN event_types e ON b.event_type_id = e.id
+         WHERE e.host_id = $1
+           AND b.status = 'CONFIRMED'
+           AND b.start_at >= clock_timestamp()
+           AND b.host_local_date = ANY($2::date[])`,
+        [session.id, unavailableDates]
+      );
+      affectedBookings = affectedRes.rows;
+    }
+
+    // If bookings are scheduled on days off and confirmation not provided, warn host
+    if (affectedBookings.length > 0 && !validated.confirmCancellation) {
+      return apiSuccess({
+        requiresConfirmation: true,
+        affectedBookingsCount: affectedBookings.length,
+        affectedBookings: affectedBookings.map((b) => ({
+          id: b.id,
+          guestName: b.guest_name,
+          guestEmail: b.guest_email,
+          startAt: b.start_at,
+          eventName: b.event_name,
+        })),
+        message: `You have ${affectedBookings.length} confirmed booking(s) scheduled on dates you marked as unavailable. Please confirm if you wish to cancel them and notify guests.`,
+      }, 200);
+    }
+
     await withTransaction(pool, async (client) => {
       // 1. Update timezone if provided
       if (validated.homeTimezone) {
@@ -84,7 +123,42 @@ export async function PUT(request: NextRequest) {
         ]);
       }
 
-      // 2. Replace availability rules
+      // 2. Cancel affected bookings if confirmed
+      if (affectedBookings.length > 0 && validated.confirmCancellation) {
+        const cancelReason = validated.cancellationReason || "Host is unavailable on this date";
+        for (const b of affectedBookings) {
+          await client.query(
+            `UPDATE bookings
+             SET status = 'CANCELLED',
+                 cancellation_reason = $1,
+                 updated_at = clock_timestamp()
+             WHERE id = $2`,
+            [cancelReason, b.id]
+          );
+
+          await client.query("DELETE FROM active_reservations WHERE booking_id = $1", [b.id]);
+
+          if (b.guest_email) {
+            await NotificationService.enqueue(client, {
+              bookingId: b.id,
+              eventType: "BOOKING_CANCELLED",
+              recipientEmail: b.guest_email,
+              subject: `Appointment Cancelled: ${b.event_name}`,
+              payload: {
+                bookingId: b.id,
+                eventName: b.event_name,
+                hostName: session.name,
+                guestName: b.guest_name,
+                guestEmail: b.guest_email,
+                startAt: new Date(b.start_at).toISOString(),
+                cancellationReason: cancelReason,
+              },
+            });
+          }
+        }
+      }
+
+      // 3. Replace availability rules
       await client.query("DELETE FROM availability_rules WHERE host_id = $1", [session.id]);
       for (const rule of validated.rules) {
         await client.query(
@@ -94,7 +168,7 @@ export async function PUT(request: NextRequest) {
         );
       }
 
-      // 3. Replace date overrides
+      // 4. Replace date overrides
       await client.query("DELETE FROM date_overrides WHERE host_id = $1", [session.id]);
       for (const o of validated.overrides) {
         await client.query(
@@ -111,7 +185,14 @@ export async function PUT(request: NextRequest) {
       }
     });
 
-    return apiSuccess({ message: "Availability updated successfully" });
+    NotificationService.processOutbox().catch((e) =>
+      console.error("Outbox process error:", e.message)
+    );
+
+    return apiSuccess({
+      message: "Availability schedule and overrides updated successfully",
+      affectedBookingsCancelled: affectedBookings.length,
+    });
   } catch (err) {
     return apiError(err);
   }

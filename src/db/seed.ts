@@ -1,4 +1,3 @@
-import bcrypt from "bcryptjs";
 import { getPool } from "./index";
 import * as dotenv from "dotenv";
 
@@ -13,46 +12,50 @@ export async function seed(customUrl?: string) {
   try {
     await client.query("BEGIN");
 
-    // Clean existing seed data
-    await client.query("DELETE FROM hosts WHERE email = 'alex@slotbook.dev'");
+    // Check if database is already initialized
+    const existingHostsRes = await client.query("SELECT COUNT(*) AS count FROM hosts");
+    const hostCount = parseInt(existingHostsRes.rows[0].count, 10);
+    if (hostCount > 0) {
+      console.log(`Database already has ${hostCount} host(s) initialized. Skipping seeding to preserve existing records.`);
+      await client.query("COMMIT");
+      return;
+    }
 
-    const passwordHash = await bcrypt.hash("password123", 10);
-
-    // 1. Create demo host
+    // 1. Create initial host (passwordless OTP ready)
     const hostRes = await client.query(
-      `INSERT INTO hosts (name, email, password_hash, home_timezone)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO hosts (name, email, password_hash, home_timezone, status)
+       VALUES ($1, $2, NULL, $3, 'ACTIVE')
        RETURNING id, name, email, home_timezone`,
-      ["Alex Chen", "alex@slotbook.dev", passwordHash, "Asia/Kolkata"]
+      ["Alex Chen", "alex@slotbook.dev", "Asia/Kolkata"]
     );
     const hostId = hostRes.rows[0].id;
     console.log(`✓ Seeded Host: ${hostRes.rows[0].name} (${hostRes.rows[0].email})`);
 
-    // 2. Create Event Types
-    // Event 1: 1-on-1 30-min chat
+    // 2. Create Event Types with the updated commercial names
+    // Event 1: 30 Min Appointment
     await client.query(
       `INSERT INTO event_types 
        (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after, minimum_notice_minutes, booking_horizon_days)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [hostId, "30 Minute Quick Chat", "30-min-chat", 30, 1, 10, 10, 60, 30]
+      [hostId, "30 Min Appointment", "30-min-appointment", 30, 1, 10, 10, 60, 30]
     );
 
-    // Event 2: 1-on-1 60-min strategy session
+    // Event 2: 1 Hr Appointment
     await client.query(
       `INSERT INTO event_types 
        (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after, minimum_notice_minutes, booking_horizon_days)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [hostId, "60 Minute Strategy Session", "strategy-session", 60, 1, 15, 15, 120, 60]
+      [hostId, "1 Hr Appointment", "1-hr-appointment", 60, 1, 15, 15, 120, 60]
     );
 
-    // Event 3: Group workshop with capacity 4
+    // Event 3: Group Discussion (capacity 4)
     await client.query(
       `INSERT INTO event_types 
        (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after, minimum_notice_minutes, booking_horizon_days)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [hostId, "Group Product Workshop", "team-workshop", 45, 4, 10, 10, 180, 30]
+      [hostId, "Group Discussion", "group-discussion", 45, 4, 10, 10, 180, 30]
     );
-    console.log("✓ Seeded Event Types (1-on-1 and Group capacity)");
+    console.log("✓ Seeded Customer-Facing Event Types (30 Min Appointment, 1 Hr Appointment, Group Discussion)");
 
     // 3. Weekly Availability (Monday - Friday, 2 windows: 09:00-12:00 and 13:00-17:00)
     for (let weekday = 1; weekday <= 5; weekday++) {

@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
 import { getSession } from "@/lib/auth";
-import { getPool } from "@/db";
+import { getPool, withTransaction } from "@/db";
 import { eventTypeSchema } from "@/lib/validations";
+import { NotificationService } from "@/lib/notification-service";
 import { apiSuccess, apiError } from "@/lib/api-utils";
 import { AppError } from "@/lib/booking-service";
 
@@ -83,16 +84,95 @@ export async function DELETE(
     }
 
     const pool = getPool();
-    const res = await pool.query(
-      "DELETE FROM event_types WHERE id = $1 AND host_id = $2 RETURNING id",
+
+    // Verify ownership
+    const eventRes = await pool.query(
+      "SELECT id, name FROM event_types WHERE id = $1 AND host_id = $2",
       [params.id, session.id]
     );
-
-    if (res.rows.length === 0) {
+    if (eventRes.rows.length === 0) {
       throw new AppError("NOT_FOUND", 404, "Event type not found");
     }
+    const event = eventRes.rows[0];
 
-    return apiSuccess({ message: "Event type deleted successfully" });
+    // Check url search params or json body for confirmation/reason
+    let confirm = false;
+    let reason = "Event discontinued by host";
+    try {
+      const body = await request.json();
+      confirm = !!body.confirm;
+      if (body.reason) reason = body.reason;
+    } catch {
+      const { searchParams } = new URL(request.url);
+      confirm = searchParams.get("confirm") === "true";
+      if (searchParams.get("reason")) reason = searchParams.get("reason")!;
+    }
+
+    // Check future confirmed bookings
+    const futureBookingsRes = await pool.query(
+      `SELECT b.id, b.guest_email, b.guest_name, b.start_at
+       FROM bookings b
+       WHERE b.event_type_id = $1
+         AND b.status = 'CONFIRMED'
+         AND b.start_at >= clock_timestamp()`,
+      [params.id]
+    );
+
+    if (futureBookingsRes.rows.length > 0 && !confirm) {
+      return apiSuccess({
+        requiresConfirmation: true,
+        affectedBookingsCount: futureBookingsRes.rows.length,
+        message: `This event has ${futureBookingsRes.rows.length} upcoming confirmed booking(s). Deleting it will cancel these bookings and notify the guests.`,
+      }, 200);
+    }
+
+    // Transactionally cancel affected bookings, notify affected guests, and delete event
+    await withTransaction(pool, async (client) => {
+      for (const booking of futureBookingsRes.rows) {
+        await client.query(
+          `UPDATE bookings
+           SET status = 'CANCELLED',
+               cancellation_reason = $1,
+               updated_at = clock_timestamp()
+           WHERE id = $2`,
+          [reason, booking.id]
+        );
+
+        await client.query("DELETE FROM active_reservations WHERE booking_id = $1", [booking.id]);
+
+        if (booking.guest_email) {
+          await NotificationService.enqueue(client, {
+            bookingId: booking.id,
+            eventType: "HOST_CANCELLED_EVENT",
+            recipientEmail: booking.guest_email,
+            subject: `Notice: ${event.name} Cancelled`,
+            payload: {
+              bookingId: booking.id,
+              eventName: event.name,
+              hostName: session.name,
+              guestName: booking.guest_name,
+              guestEmail: booking.guest_email,
+              startAt: booking.start_at.toISOString(),
+              cancellationReason: reason,
+            },
+          });
+        }
+      }
+
+      await client.query(
+        "DELETE FROM event_types WHERE id = $1 AND host_id = $2",
+        [params.id, session.id]
+      );
+    });
+
+    NotificationService.processOutbox().catch((e) =>
+      console.error("Outbox process error:", e.message)
+    );
+
+    return apiSuccess({
+      message: "Event type deleted successfully",
+      affectedBookingsCancelled: futureBookingsRes.rows.length,
+    });
   } catch (err) {
     return apiError(err);
   }

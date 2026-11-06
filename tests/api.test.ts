@@ -61,13 +61,15 @@ describe("Slotbook API Service Integration", () => {
     expect(confirmRes.guestName).toBe("John Doe");
     expect(confirmRes.manageToken).toBeDefined();
 
-    // Verify Notification Outbox has BOOKING_CONFIRMED
+    // Verify Notification Outbox has BOOKING_CONFIRMED for both guest and host
     const outboxConfirm = await pool.query(
-      "SELECT event_type, delivery_status FROM notification_outbox WHERE booking_id = $1 AND event_type = 'BOOKING_CONFIRMED'",
+      "SELECT event_type, delivery_status, recipient_email FROM notification_outbox WHERE booking_id = $1 AND event_type = 'BOOKING_CONFIRMED'",
       [holdRes.data.id]
     );
-    expect(outboxConfirm.rows.length).toBe(1);
-    expect(outboxConfirm.rows[0].delivery_status).toBe("PENDING");
+    expect(outboxConfirm.rows.length).toBe(2);
+    expect(outboxConfirm.rows.map((r: any) => r.recipient_email).sort()).toEqual(
+      ["apitester@slotbook.dev", "john@example.com"].sort()
+    );
 
     // 3. Reschedule
     const newSlotStart = "2027-08-10T11:00:00.000Z";
@@ -79,12 +81,12 @@ describe("Slotbook API Service Integration", () => {
     expect(rescheduleRes.status).toBe("CONFIRMED");
     expect(rescheduleRes.startAt).toBe(newSlotStart);
 
-    // Verify Notification Outbox has BOOKING_RESCHEDULED
+    // Verify Notification Outbox has BOOKING_RESCHEDULED for guest and host
     const outboxResched = await pool.query(
-      "SELECT event_type FROM notification_outbox WHERE booking_id = $1 AND event_type = 'BOOKING_RESCHEDULED'",
+      "SELECT event_type, recipient_email FROM notification_outbox WHERE booking_id = $1 AND event_type = 'BOOKING_RESCHEDULED'",
       [holdRes.data.id]
     );
-    expect(outboxResched.rows.length).toBe(1);
+    expect(outboxResched.rows.length).toBe(2);
 
     // 4. Cancel
     const cancelRes = await BookingService.cancelBooking({
@@ -95,11 +97,11 @@ describe("Slotbook API Service Integration", () => {
     expect(cancelRes.status).toBe("CANCELLED");
     expect(cancelRes.cancellationReason).toBe("Conflict with another meeting");
 
-    // Verify Notification Outbox has BOOKING_CANCELLED
+    // Verify Notification Outbox has BOOKING_CANCELLED for guest and host
     const outboxCancel = await pool.query(
-      "SELECT event_type FROM notification_outbox WHERE booking_id = $1 AND event_type = 'BOOKING_CANCELLED'",
+      "SELECT event_type, recipient_email FROM notification_outbox WHERE booking_id = $1 AND event_type = 'BOOKING_CANCELLED'",
       [holdRes.data.id]
     );
-    expect(outboxCancel.rows.length).toBe(1);
+    expect(outboxCancel.rows.length).toBe(2);
   });
 });

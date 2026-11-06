@@ -15,6 +15,7 @@ export async function GET() {
     const pool = getPool();
     const res = await pool.query(
       `SELECT b.id, b.guest_name as "guestName", b.guest_email as "guestEmail",
+              b.meeting_purpose as "meetingPurpose", b.meet_link as "meetLink",
               b.start_at as "startAt", b.end_at as "endAt", b.status,
               b.cancellation_reason as "cancellationReason", b.created_at as "createdAt",
               e.id as "eventTypeId", e.name as "eventName", e.slug as "eventSlug"

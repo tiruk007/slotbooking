@@ -25,8 +25,9 @@ export const hosts = pgTable("hosts", {
   id: uuid("id").defaultRandom().primaryKey(),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
-  passwordHash: text("password_hash").notNull(),
+  passwordHash: text("password_hash"),
   homeTimezone: text("home_timezone").notNull().default("UTC"),
+  status: text("status").notNull().default("ACTIVE"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -96,12 +97,15 @@ export const bookings = pgTable(
       .references(() => eventTypes.id, { onDelete: "cascade" }),
     guestName: text("guest_name"),
     guestEmail: text("guest_email"),
+    meetingPurpose: text("meeting_purpose").notNull().default("General Appointment"),
     startAt: timestamp("start_at", { withTimezone: true }).notNull(),
     endAt: timestamp("end_at", { withTimezone: true }).notNull(),
+    hostLocalDate: date("host_local_date"),
     status: text("status").notNull(), // HELD, CONFIRMED, CANCELLED, EXPIRED, RESCHEDULED
     holdExpiresAt: timestamp("hold_expires_at", { withTimezone: true }),
     cancellationReason: text("cancellation_reason"),
     manageTokenHash: text("manage_token_hash").unique(),
+    meetLink: text("meet_link"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -133,6 +137,24 @@ export const activeReservations = pgTable(
   })
 );
 
+export const otpCodes = pgTable(
+  "otp_codes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    email: text("email").notNull(),
+    purpose: text("purpose").notNull(), // HOST_REGISTER, HOST_LOGIN, HOST_DELETE_ACCOUNT, GUEST_BOOKING
+    codeHash: text("code_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    attempts: integer("attempts").notNull().default(0),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    lookupIdx: index("idx_otp_codes_lookup").on(table.email, table.purpose, table.expiresAt),
+  })
+);
+
 export const idempotencyKeys = pgTable(
   "idempotency_keys",
   {
@@ -153,9 +175,14 @@ export const notificationOutbox = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     bookingId: uuid("booking_id").references(() => bookings.id, { onDelete: "set null" }),
-    eventType: text("event_type").notNull(), // BOOKING_CONFIRMED, BOOKING_RESCHEDULED, BOOKING_CANCELLED
+    eventType: text("event_type").notNull(),
+    recipientEmail: text("recipient_email"),
+    subject: text("subject"),
     payload: jsonb("payload").notNull(),
     deliveryStatus: text("delivery_status").notNull().default("PENDING"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    lastError: text("last_error"),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({

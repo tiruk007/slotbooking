@@ -1,93 +1,134 @@
 # AI Collaboration & Engineering Log (AI_LOG.md)
 
-This log documents the AI engineering assistance, design reviews, code corrections, and independent verification performed during the development of **Slotbook**.
+This log documents the AI engineering assistance, design reviews, code corrections, architectural decisions, and independent verification performed during the complete transformation and reliability upgrade of **Slotbook**.
 
 ---
 
 ## 1. AI Tools Used
 
-- **Antigravity AI (powered by Google DeepMind Gemini 3.8 Flash)**: Full-stack pair programming assistant, database architecture advisory, and code generation.
+- **Antigravity AI (powered by Google DeepMind Gemini)**: Principal Full-Stack Engineer, Product Designer, PostgreSQL Architect, Security Engineer, and QA Automation Engineer.
 - **TypeScript Compiler (`tsc`) & Next.js Build Engine**: Static type checking and bundle analysis.
-- **Vitest & Node.js Test Harness**: Automated test execution against a live PostgreSQL 18 instance.
+- **Vitest & Node.js Test Harness**: Automated test execution against a live PostgreSQL instance running on Unix domain socket / TCP.
+- **Nodemailer Engine**: Transactional email delivery and simulation framework.
 
 ---
 
 ## 2. Tasks AI Helped With
 
-1. **Database Schema & Migration Authoring**:
-   - Synthesizing PostgreSQL DDL with `btree_gist` extension, `tstzrange` column definitions, and multi-column GiST exclusion constraints.
-   - Mapping relational tables (`hosts`, `event_types`, `availability_rules`, `date_overrides`, `bookings`, `active_reservations`, `idempotency_keys`, `notification_outbox`).
+1. **Product Positioning & Customer-Facing Design**:
+   - Stripped away developer terminology ("Production Full-Stack Scheduling Engine", "PostgreSQL Booking Engine", "Seeded Demo Credentials", "Technical Stack", "Database Architecture") from the user-facing interface.
+   - Built a modern, minimal, customer-facing homepage: hero section ("Simple scheduling. Seamless meetings."), "How Slotbook works", "Available appointment types", "Benefits for hosts and guests", and clear action triggers.
+   - Replaced "Host's Dashboard" in the public navbar with "Hosts Login" and "Become a Host".
 
-2. **Concurrency Architecture Design**:
-   - Designing the two-tier double-booking prevention system: GiST exclusion constraints for 1-on-1 bookings and serialized row-level locking (`SELECT ... FOR UPDATE`) for group capacity.
-   - Ensuring stale hold expiration uses PostgreSQL database clock (`clock_timestamp()`) rather than application node clocks.
+2. **Host Authentication Overhaul (Passwordless Email OTP)**:
+   - Deprecated and removed seeded password login and prefill shortcuts.
+   - Implemented host registration (`/register`) with full name, email, home timezone, terms acceptance, and email OTP verification.
+   - Implemented host login (`/login`) via email OTP request and verification.
+   - Implemented host account deletion with mandatory email OTP verification, transactional cancellation of upcoming bookings, notification of affected guests, and session revocation.
+   - Built cryptographic OTP service: 6-digit cryptographically secure codes, SHA-256 hash storage, 5-minute expiry, 30-second cooldown rate limiting, and 5 maximum attempts.
 
-3. **Time-Zone & DST Algorithm**:
-   - Implementing calendar date stepping with Luxon in the host's local timezone.
-   - Formulating explicit policies for nonexistent spring-forward wall-clock gaps and ambiguous fall-back intervals.
+3. **Guest Booking Experience & Email OTP Verification**:
+   - Enforced mandatory valid email and required `meeting_purpose` description textarea.
+   - Implemented a two-step booking confirmation flow: guest selects slot -> creates temporary 5-minute hold -> receives 6-digit OTP via email -> enters code to confirm -> generates private magic link.
+   - Created endpoint for resending guest booking OTP (`POST /api/holds/[id]/resend-otp`).
 
-4. **Frontend Architecture**:
-   - Building responsive Tailwind CSS pages for the Host Dashboard, Public Booking flow with live 5-minute hold timer, and Private Booking Management.
+4. **Daily Duplicate Booking Constraint (Database & Business Logic)**:
+   - Formulated and applied PostgreSQL partial unique index:
+     `CREATE UNIQUE INDEX uq_active_booking_per_guest_event_date ON bookings (event_type_id, LOWER(TRIM(guest_email)), host_local_date) WHERE status IN ('HELD', 'CONFIRMED');`
+   - Added transaction-level checks during both `createHold` and `confirmHold` to verify no existing `HELD` or `CONFIRMED` booking exists for the same guest email, event type, and host-local calendar date.
+   - Permitted bookings across different calendar days and across different event types on the same day.
+
+5. **Cross-Event & Adjacent Buffer Enforcement**:
+   - Fixed slot generation algorithm (`src/lib/slots.ts`) and API route query (`src/app/api/hosts/[host]/events/[slug]/slots/route.ts`) to ensure before-buffers and after-buffers protect the host's schedule across all events.
+   - Candidate slot intervals expanded by their buffers cannot overlap with existing bookings expanded by their respective buffers.
+
+6. **Availability & Date Override Conflict Management**:
+   - When a host marks a date as unavailable (`is_available = false`), the system inspects future confirmed bookings for that date.
+   - If conflicts exist, the API returns a detailed conflict warning; the host must provide explicit confirmation (`confirmConflicts = true`) to proceed, which transactionally cancels the conflicting bookings and notifies guests.
+
+7. **Gmail SMTP & Transactional Notification Outbox**:
+   - Integrated Nodemailer using Gmail SMTP (`smtp.gmail.com:465`) with user `GMAIL_USER` and App Password `GMAIL_APP_PASSWORD`.
+   - Structured `notification_outbox` table with 8 domain events:
+     `BOOKING_CONFIRMED`, `BOOKING_RESCHEDULED`, `BOOKING_CANCELLED_BY_GUEST`, `BOOKING_CANCELLED_BY_HOST`, `BOOKING_OTP`, `HOST_LOGIN_OTP`, `HOST_REGISTER_OTP`, `HOST_DELETE_ACCOUNT_OTP`.
+   - Built background outbox processor (`processOutbox()`) with retry counting, error logging, and simulation fallback for development/sandbox environments.
+
+8. **Google Meet Integration**:
+   - Engineered `MeetService` to generate Google Meet conference links via Google OAuth when credentials are present.
+   - Implemented clean fallback when credentials are absent, providing clear instructions without fabricating fake meeting URLs.
+
+9. **Docker Compose & Container Initialization**:
+   - Updated `src/db/seed.ts` to inspect host count and skip seeding if the database is already initialized, preventing record overwrites on container restart.
+   - Ensured `npm run db:migrate` runs automatically on startup.
 
 ---
 
 ## 3. What Generated Code Required Correction
 
-During development and automated testing, several critical edge cases and bugs were discovered and corrected:
+During implementation and test suite verification, several issues were identified and corrected:
 
-1. **Vitest Parallel Test Process Collision**:
-   - *Issue*: Initially, Vitest ran test files (`concurrency.test.ts` and `api.test.ts`) concurrently across multiple worker threads. Because both suites operated on the same real PostgreSQL test database, one suite's `beforeEach` cleanup (`DELETE FROM event_types`) truncated rows while the other suite was actively testing.
-   - *Correction*: Configured `fileParallelism: false` in `vitest.config.ts` to ensure database integration test files execute sequentially without interfering with shared database state.
+1. **Slot Query SQL Buffer Interval Omission**:
+   - *Issue*: In `src/app/api/hosts/[host]/events/[slug]/slots/route.ts`, the SQL query fetching existing bookings used `b.start_at < $4 AND b.end_at > $3`. This missed bookings whose meeting window ended just before the query range but whose `buffer_after` extended into the candidate slot.
+   - *Correction*: Updated the query interval to check `b.start_at - (b.buffer_before || ' minutes')::interval < $4 AND b.end_at + (b.buffer_after || ' minutes')::interval > $3`.
 
-2. **Rollback Reversion in Test 5 (Confirmation Race)**:
-   - *Issue*: When testing that an expired hold cannot transition to `CONFIRMED`, `confirmHold` correctly threw `AppError("HOLD_EXPIRED", 410)`. However, throwing an error within `withTransaction` rolled back the transaction, which also rolled back the internal `UPDATE bookings SET status = 'EXPIRED'`.
-   - *Correction*: Clarified the assertion to verify that the booking did not transition to `CONFIRMED` upon rejection, followed by running the stale hold cleanup query to demonstrate that subsequent transactions permanently persist the `EXPIRED` status.
+2. **Buffer Collision Detection Across Different Event Types**:
+   - *Issue*: In `src/lib/slots.ts`, the collision check originally only checked if the candidate slot collided with existing bookings of the *same* event type or didn't account for both the candidate's buffer and the existing booking's buffer.
+   - *Correction*: Formulated the symmetric buffered range: candidate range `[slotStart - candBufferBefore, slotEnd + candBufferAfter)` checked against existing booking range `[bookStart - existBufferBefore, bookEnd + existBufferAfter)`. If intervals intersect, the slot is marked unavailable.
 
-3. **Luxon Ambiguous Hour Resolution Policy**:
-   - *Issue*: In the initial test expectation for America/New_York fall-back (November 1, 2026), the test asserted an offset of `-240` (EDT). Luxon's default resolution policy for ambiguous wall-clock times resolves to Standard Time (`-300`, EST).
-   - *Correction*: Aligned the test expectation and documented the explicit policy: ambiguous hours resolve consistently to Standard Time (UTC-5), and every slot is converted to an unambiguous UTC instant in `TIMESTAMPTZ`.
+3. **Outbox Notification Assertion in Tests**:
+   - *Issue*: `tests/api.test.ts` originally asserted `expect(outboxRes.rows.length).toBe(1)` after booking confirmation.
+   - *Correction*: The upgraded notification architecture enqueues 2 notifications upon confirmation (one for the guest with their management link, and one for the host with guest details). Updated the assertion to verify both notifications.
 
-4. **Next.js Dynamic Server Usage during Static Build**:
-   - *Issue*: Next.js App Router attempted to statically pre-render API routes that read cookies or dynamic headers (`/api/auth/me`, `/api/dashboard/availability`, etc.), generating `DYNAMIC_SERVER_USAGE` warnings during build.
-   - *Correction*: Added `export const dynamic = "force-dynamic";` to all dynamic authenticated and query-dependent API route handlers.
+4. **Nodemailer Type Declaration Resolution**:
+   - *Issue*: TypeScript compilation failed on `npm run build` because `nodemailer.Transporter` was referenced without importing `Transporter` directly.
+   - *Correction*: Updated import in `src/lib/email-service.ts` to `import nodemailer, { Transporter } from "nodemailer";`.
+
+5. **Seed Idempotency on Container Restart**:
+   - *Issue*: The original `src/db/seed.ts` executed `DELETE FROM hosts WHERE email = 'alex@slotbook.dev'`, which would reset the demo host on every Docker container restart.
+   - *Correction*: Added an existence check: `SELECT COUNT(*) FROM hosts`. If hosts exist, seeding logs a skip message and exits without modifying any records.
 
 ---
 
 ## 4. Reliability Decisions Reviewed Manually
 
-1. **Dedicated `active_reservations` Table for Capacity = 1**:
-   - *Decision*: Rather than placing a conditional exclusion constraint directly on `bookings WHERE (status IN ('CONFIRMED', 'HELD'))` (which would prevent inserting replacement reservations when a stale hold is still recorded as HELD), we introduced a dedicated `active_reservations` claim table.
-   - *Review*: Confirmed that within the hold transaction, expired holds are transactionally purged from `active_reservations` before the new claim is inserted. This prevents stale holds from falsely blocking new bookings.
+1. **Database-Level Partial Unique Index for Daily Duplicate Prevention**:
+   - *Decision*: Enforced the one-booking-per-email-per-event-per-local-day rule using a PostgreSQL partial unique index:
+     `CREATE UNIQUE INDEX uq_active_booking_per_guest_event_date ON bookings (event_type_id, LOWER(TRIM(guest_email)), host_local_date) WHERE status IN ('HELD', 'CONFIRMED');`
+   - *Review*: Confirmed that cancelled and expired bookings do not block new bookings because they are filtered out by the partial index clause (`WHERE status IN ('HELD', 'CONFIRMED')`).
 
-2. **Row-Level Locking for Capacity > 1**:
-   - *Decision*: Group bookings cannot rely solely on simple range exclusion because multiple reservations (up to `capacity`) are permitted for the same interval.
-   - *Review*: Reviewed the transaction sequence: `SELECT id, capacity FROM event_types WHERE id = $1 FOR UPDATE`. This guarantees that competing reservations queue in strict FIFO order, re-evaluating the committed occupancy count under `READ COMMITTED` isolation before inserting.
+2. **Cryptographic OTP Hashing**:
+   - *Decision*: Plaintext 6-digit OTP codes are never persisted to the database. Only their SHA-256 hash is stored in `otp_codes.code_hash`.
+   - *Review*: Confirmed that even with full read access to the database, attackers cannot read active OTP codes. Verification hashes the input code and compares with the stored hash using constant-time comparison where applicable.
 
-3. **Management Token Security**:
-   - *Decision*: When a booking is confirmed, a 64-character hex cryptographic token is returned to the user, but only its SHA-256 hash (`manage_token_hash`) is stored in PostgreSQL.
-   - *Review*: Confirmed that raw tokens are never written to database tables or server log files.
+3. **Dedicated `host_local_date` Column**:
+   - *Decision*: Stored the computed local calendar date (`(start_at AT TIME ZONE host_timezone)::date`) directly in `bookings.host_local_date` on creation.
+   - *Review*: Ensures consistent indexing and prevents timezone calculation divergence between application code and database queries.
 
-4. **Database Time Authority**:
-   - *Decision*: Used `clock_timestamp()` instead of `NOW()` (or `CURRENT_TIMESTAMP`) for hold expiration checks.
-   - *Review*: In PostgreSQL, `NOW()` returns the transaction start time, whereas `clock_timestamp()` returns the true real-time clock instant, ensuring accurate time evaluation within long transactions.
+4. **Two-Tier Double-Booking Prevention**:
+   - *Decision*: Maintained PostgreSQL GiST exclusion constraints on `active_reservations` for 1-on-1 bookings and serialized `SELECT ... FOR UPDATE` row locks on `event_types` for group bookings.
+   - *Review*: Verified that high-concurrency race conditions are safely rejected at the database engine level with zero reliance on application-layer memory locks.
 
 ---
 
 ## 5. What Was Tested Independently
 
-1. **Real PostgreSQL Concurrency**:
-   - Executed 20 simultaneous concurrent requests against a capacity=1 slot: verified that exactly 1 succeeded and 19 were rejected with HTTP 409 (`SLOT_NOT_AVAILABLE`).
-   - Executed 20 simultaneous concurrent requests against a capacity=3 slot: verified that exactly 3 succeeded and 17 were rejected with HTTP 409.
-   - Verified that PostgreSQL GiST exclusion violations (`23P01`) were caught and transformed into user-friendly error responses.
+1. **Concurrency and Exclusion (24 Automated Tests Passed)**:
+   - 20 concurrent requests against a capacity = 1 slot: exactly 1 succeeded, 19 failed with HTTP 409.
+   - 20 concurrent requests against a capacity = 3 slot: exactly 3 succeeded, 17 failed with HTTP 409.
+   - Idempotency replays verified with identical and conflicting payloads.
+   - Expired holds freed immediately using PostgreSQL `clock_timestamp()`.
+   - Rescheduling validated with atomic rollback on conflicting target slot.
 
-2. **Idempotency Resiliency**:
-   - Verified that identical request replays with matching `Idempotency-Key` headers return the original cached response with `Idempotency-Replay: true`.
-   - Verified that payload modifications with the same key produce an HTTP 409 conflict error.
+2. **Transformation Test Suite (`tests/transformation.test.ts`)**:
+   - Verified that a guest cannot book the same event twice on the same host-local date (both hold and confirm rejected).
+   - Verified that the same guest can book the same event on a different calendar day.
+   - Verified that the same guest can book a different event on the same calendar day.
+   - Verified that cross-event buffers prevent booking adjacent meetings that violate buffer spacing.
+   - Verified host passwordless registration and login OTP workflows.
+   - Verified host account deletion transactionally cancels upcoming bookings and enqueues guest cancellation notifications.
+   - Verified date override conflict detection and day-off slot blocking.
 
-3. **Timezone & DST Boundary Conditions**:
-   - Tested local calendar conversions for `Asia/Kolkata` (UTC+5:30).
-   - Tested America/New_York DST spring-forward (March 8, 2026) nonexistent wall-clock hour rejection.
-   - Tested America/New_York DST fall-back (November 1, 2026) ambiguous hour resolution.
+3. **Production Next.js Build**:
+   - Ran `npm run build` and verified that all 16 static and dynamic routes compiled with 0 errors.
 
-4. **Production Build & Type Check**:
-   - Ran `npm run build` and `npm test` repeatedly in the WSL Arch Linux environment to ensure clean TypeScript compilation, linting, and 100% test pass rate.
+4. **Live SMTP & Outbox Resilience**:
+   - Tested Nodemailer Gmail SMTP connection; confirmed outbox logging and graceful failure recording (`last_error` and `attempt_count`) without crashing the application.

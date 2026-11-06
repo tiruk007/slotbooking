@@ -104,8 +104,8 @@ export async function GET(
        WHERE e.host_id = $1
          AND b.status IN ('HELD', 'CONFIRMED')
          AND (b.hold_expires_at IS NULL OR b.hold_expires_at > clock_timestamp())
-         AND b.end_at >= $2::timestamptz
-         AND b.start_at <= $3::timestamptz`,
+         AND (b.end_at + (e.buffer_after || ' minutes')::interval) >= $2::timestamptz
+         AND (b.start_at - (e.buffer_before || ' minutes')::interval) <= $3::timestamptz`,
       [host.id, from.toISO(), to.toISO()]
     );
 

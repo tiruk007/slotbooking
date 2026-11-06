@@ -40,6 +40,8 @@ export interface AvailableSlot {
 
 /**
  * Calculates available booking slots for a host and event type within a date range.
+ * Fully enforces buffer-before, buffer-after, group capacity, weekly availability,
+ * and date overrides.
  */
 export function calculateAvailableSlots(params: {
   hostTimezone: string;
@@ -85,7 +87,7 @@ export function calculateAvailableSlots(params: {
   let currentDay = from.setZone(hostTimezone).startOf("day");
   const endDay = to.setZone(hostTimezone).endOf("day");
 
-  // Step interval for slots (e.g. 30 min or duration if less than 30)
+  // Step interval for slots (e.g. 15 or 30 min)
   const stepMinutes = Math.min(eventType.durationMinutes, 30);
 
   while (currentDay <= endDay) {
@@ -94,6 +96,7 @@ export function calculateAvailableSlots(params: {
 
     let dayWindows: { startHour: number; startMin: number; endHour: number; endMin: number }[] = [];
 
+    // Date override takes strict precedence over weekly availability
     if (overrideMap.has(dateStr!)) {
       const override = overrideMap.get(dateStr!)!;
       if (override.isAvailable) {
@@ -121,6 +124,7 @@ export function calculateAvailableSlots(params: {
           }
         }
       }
+      // If isAvailable === false (day off), dayWindows remains empty!
     } else {
       // Normal weekday rules
       const weekdayRules = rulesByWeekday.get(weekday) || [];
@@ -179,8 +183,9 @@ export function calculateAvailableSlots(params: {
           continue;
         }
 
-        // 3. Existing bookings & capacity check
+        // 3. Existing bookings & buffer check
         // Candidate slot reserved buffered range:
+        // [candidateBufStart, candidateBufEnd)
         const candidateBufStart = slotStartUtc.minus({ minutes: eventType.bufferBefore }).toMillis();
         const candidateBufEnd = slotEndUtc.plus({ minutes: eventType.bufferAfter }).toMillis();
 
@@ -193,23 +198,20 @@ export function calculateAvailableSlots(params: {
           const bookingBufStart = bookingStartMillis - b.bufferBefore * 60 * 1000;
           const bookingBufEnd = bookingEndMillis + b.bufferAfter * 60 * 1000;
 
-          if (eventType.capacity === 1) {
-            // Any overlap with buffered range blocks this 1-on-1 slot
+          // Check if this booking belongs to the exact same group session
+          if (
+            eventType.capacity > 1 &&
+            b.eventTypeId === eventType.id &&
+            bookingStartMillis === slotStartUtc.toMillis()
+          ) {
+            activeCount++;
+          } else {
+            // Either 1-on-1, another event type, or an adjacent/different slot of the same event:
+            // Check for buffer overlap:
             // Ranges overlap if: start1 < end2 AND start2 < end1
             if (candidateBufStart < bookingBufEnd && bookingBufStart < candidateBufEnd) {
               isBlocked = true;
               break;
-            }
-          } else {
-            // Group booking: count bookings matching this exact slot start
-            if (b.eventTypeId === eventType.id && bookingStartMillis === slotStartUtc.toMillis()) {
-              activeCount++;
-            } else if (b.eventTypeId !== eventType.id) {
-              // Another event overlaps host's schedule
-              if (candidateBufStart < bookingBufEnd && bookingBufStart < candidateBufEnd) {
-                isBlocked = true;
-                break;
-              }
             }
           }
         }

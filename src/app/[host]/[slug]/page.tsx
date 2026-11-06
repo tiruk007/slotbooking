@@ -17,6 +17,9 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  MessageSquare,
+  KeyRound,
+  RotateCcw,
 } from "lucide-react";
 
 const COMMON_TIMEZONES = [
@@ -50,19 +53,26 @@ export default function PublicBookingPage() {
   const [eventData, setEventData] = useState<any>(null);
   const [slots, setSlots] = useState<any[]>([]);
 
-  // Selected date
+  // Selected date & slot
   const [selectedDate, setSelectedDate] = useState<string>("");
+  const [selectedSlot, setSelectedSlot] = useState<any | null>(null);
 
-  // Hold state
-  const [activeHold, setActiveHold] = useState<any | null>(null);
-  const [holdSecondsLeft, setHoldSecondsLeft] = useState<number>(300);
-  const [isHolding, setIsHolding] = useState(false);
+  // Booking step: 1 = select slot, 2 = details & request code, 3 = verify OTP, 4 = confirmed
+  const [bookingStep, setBookingStep] = useState<1 | 2 | 3 | 4>(1);
 
   // Guest inputs
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
-  const [confirming, setConfirming] = useState(false);
+  const [meetingPurpose, setMeetingPurpose] = useState("");
+
+  // Hold & OTP state
+  const [activeHold, setActiveHold] = useState<any | null>(null);
+  const [holdSecondsLeft, setHoldSecondsLeft] = useState<number>(300);
+  const [verificationCode, setVerificationCode] = useState("");
+  const [isRequestingCode, setIsRequestingCode] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
   const [confirmedBooking, setConfirmedBooking] = useState<any | null>(null);
+  const [resendCooldown, setResendCooldown] = useState(0);
 
   // Detect browser timezone on mount
   useEffect(() => {
@@ -93,6 +103,7 @@ export default function PublicBookingPage() {
       if (remainingSecs <= 0) {
         clearInterval(timer);
         setActiveHold(null);
+        setBookingStep(1);
         setError("Your 5-minute hold has expired. Please select a slot again.");
         loadSlots();
       }
@@ -100,6 +111,15 @@ export default function PublicBookingPage() {
 
     return () => clearInterval(timer);
   }, [activeHold]);
+
+  // Resend cooldown timer
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setResendCooldown((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [resendCooldown]);
 
   const loadSlots = async () => {
     setLoading(true);
@@ -138,7 +158,7 @@ export default function PublicBookingPage() {
     for (const slot of slots) {
       const dateKey = new Date(slot.startAt).toLocaleDateString("en-CA", {
         timeZone: guestTz,
-      }); // "YYYY-MM-DD"
+      });
       const list = map.get(dateKey) || [];
       list.push(slot);
       map.set(dateKey, list);
@@ -150,9 +170,32 @@ export default function PublicBookingPage() {
     return Array.from(slotsByDate.keys()).sort();
   }, [slotsByDate]);
 
-  // Handle slot selection -> Request 5-minute hold
-  const handleSelectSlot = async (slot: any) => {
-    setIsHolding(true);
+  // Handle slot selection -> Move to details step
+  const handleSlotClick = (slot: any) => {
+    setSelectedSlot(slot);
+    setBookingStep(2);
+    setError(null);
+  };
+
+  // Step 2: Request Hold and Send Verification Code
+  const handleRequestHoldAndCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSlot || !eventData) return;
+
+    if (!guestName.trim()) {
+      setError("Please enter your full name.");
+      return;
+    }
+    if (!guestEmail.trim()) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+    if (!meetingPurpose.trim() || meetingPurpose.trim().length < 3) {
+      setError("Please explain the purpose of your appointment (at least 3 characters).");
+      return;
+    }
+
+    setIsRequestingCode(true);
     setError(null);
 
     try {
@@ -165,38 +208,72 @@ export default function PublicBookingPage() {
         },
         body: JSON.stringify({
           eventTypeId: eventData.id,
-          startAt: slot.startAt,
+          startAt: selectedSlot.startAt,
+          guestName: guestName.trim(),
+          guestEmail: guestEmail.trim(),
+          meetingPurpose: meetingPurpose.trim(),
         }),
       });
 
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data?.error?.message || "Failed to hold slot");
+        throw new Error(data?.error?.message || "Failed to reserve slot");
       }
 
       setActiveHold(data);
       const expiresAt = new Date(data.holdExpiresAt).getTime();
       setHoldSecondsLeft(Math.max(0, Math.floor((expiresAt - Date.now()) / 1000)));
+      setResendCooldown(30);
+      setBookingStep(3);
     } catch (err: any) {
       setError(err.message || "Could not reserve slot. Please select another slot.");
       loadSlots();
     } finally {
-      setIsHolding(false);
+      setIsRequestingCode(false);
     }
   };
 
-  // Confirm hold with guest info
-  const handleConfirm = async (e: React.FormEvent) => {
+  // Resend OTP code
+  const handleResendCode = async () => {
+    if (!activeHold || resendCooldown > 0) return;
+    setError(null);
+    try {
+      const res = await fetch(`/api/holds/${activeHold.id}/resend-otp`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error?.message || "Failed to resend verification code");
+      }
+      setResendCooldown(30);
+    } catch (err: any) {
+      setError(err.message || "Failed to resend code");
+    }
+  };
+
+  // Step 3: Verify OTP and Confirm Booking
+  const handleConfirmWithOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeHold) return;
-    setConfirming(true);
+
+    if (!verificationCode || verificationCode.trim().length !== 6) {
+      setError("Please enter the 6-digit verification code sent to your email.");
+      return;
+    }
+
+    setIsVerifying(true);
     setError(null);
 
     try {
       const res = await fetch(`/api/holds/${activeHold.id}/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ guestName, guestEmail }),
+        body: JSON.stringify({
+          code: verificationCode.trim(),
+          guestName: guestName.trim(),
+          guestEmail: guestEmail.trim(),
+          meetingPurpose: meetingPurpose.trim(),
+        }),
       });
 
       const data = await res.json();
@@ -206,92 +283,124 @@ export default function PublicBookingPage() {
 
       setConfirmedBooking(data);
       setActiveHold(null);
+      setBookingStep(4);
     } catch (err: any) {
-      setError(err.message || "Failed to confirm booking");
+      setError(err.message || "Verification failed. Please check the code and try again.");
     } finally {
-      setConfirming(false);
+      setIsVerifying(false);
     }
   };
 
   if (loading && !hostData) {
     return (
       <div className="min-h-[70vh] flex items-center justify-center text-slate-500">
-        Loading availability...
+        <div className="flex items-center space-x-2">
+          <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+          <span>Loading available times...</span>
+        </div>
       </div>
     );
   }
 
-  // View: Booking Confirmed
+  // STEP 4: Confirmed View
   if (confirmedBooking) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-16">
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-lg p-8 text-center space-y-6">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-md p-8 text-center space-y-6">
           <div className="w-16 h-16 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto border border-emerald-100">
             <CheckCircle2 className="w-10 h-10" />
           </div>
 
           <div className="space-y-2">
-            <h1 className="text-3xl font-extrabold text-slate-900">You are Scheduled!</h1>
+            <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">You are Scheduled!</h1>
             <p className="text-slate-600">
               A calendar appointment has been created with <strong>{hostData?.name}</strong>.
             </p>
           </div>
 
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 text-left space-y-3 text-sm">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-200">
-              <span className="font-semibold text-slate-800">{eventData?.name}</span>
-              <span className="text-xs text-slate-500">{eventData?.durationMinutes} mins</span>
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 text-left space-y-3.5 text-sm">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+              <span className="font-semibold text-slate-900 text-base">{eventData?.name}</span>
+              <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full font-medium">
+                {eventData?.durationMinutes} mins
+              </span>
             </div>
 
             <div className="flex items-center gap-2 text-slate-700">
-              <Calendar className="w-4 h-4 text-indigo-600" />
+              <Calendar className="w-4 h-4 text-indigo-600 flex-shrink-0" />
               <span>
                 {new Date(confirmedBooking.startAt).toLocaleString("en-US", {
                   timeZone: guestTz,
                   weekday: "long",
-                  month: "short",
+                  month: "long",
                   day: "numeric",
                   year: "numeric",
                   hour: "numeric",
-                  minute: "numeric",
-                  hour12: true,
+                  minute: "2-digit",
                 })}
               </span>
-              <span className="text-xs text-slate-400">({guestTz})</span>
             </div>
 
             <div className="flex items-center gap-2 text-slate-700">
-              <User className="w-4 h-4 text-indigo-600" />
-              <span>{confirmedBooking.guestName}</span>
-              <span className="text-xs text-slate-400">&bull; {confirmedBooking.guestEmail}</span>
+              <Globe className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+              <span>{guestTz}</span>
+            </div>
+
+            <div className="flex items-start gap-2 text-slate-700 pt-2 border-t border-slate-200">
+              <MessageSquare className="w-4 h-4 text-indigo-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <span className="text-xs text-slate-500 uppercase font-semibold block">Meeting Purpose</span>
+                <p className="text-slate-800 text-sm mt-0.5">{confirmedBooking.meetingPurpose}</p>
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-slate-200">
+              {confirmedBooking.meetLink ? (
+                <div className="flex items-center justify-between bg-white border border-indigo-100 rounded-lg p-3">
+                  <div className="flex items-center gap-2 text-indigo-700 font-medium">
+                    <Globe className="w-4 h-4" />
+                    <span>Google Meet video conference ready</span>
+                  </div>
+                  <a
+                    href={confirmedBooking.meetLink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs font-semibold bg-indigo-600 text-white px-3 py-1.5 rounded hover:bg-indigo-700"
+                  >
+                    Join Meet
+                  </a>
+                </div>
+              ) : (
+                <div className="text-xs text-slate-500 bg-slate-100/70 p-3 rounded-lg">
+                  <strong>Meeting Location:</strong> The host will share the video conference link prior to the appointment.
+                </div>
+              )}
             </div>
           </div>
 
-          {confirmedBooking.manageUrl && (
-            <div className="p-4 bg-indigo-50 border border-indigo-200 rounded-xl text-left space-y-2">
-              <div className="text-xs font-bold text-indigo-900 uppercase tracking-wider flex items-center gap-1.5">
-                <Lock className="w-3.5 h-3.5" />
-                <span>Private Booking Management URL</span>
-              </div>
-              <p className="text-xs text-indigo-700">
-                Bookmark or visit your private URL below if you ever need to reschedule or cancel:
-              </p>
+          <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-4 text-left flex items-start gap-3">
+            <Mail className="w-5 h-5 text-indigo-600 flex-shrink-0 mt-0.5" />
+            <div className="text-xs text-slate-700 leading-relaxed">
+              We sent a confirmation email to <strong>{confirmedBooking.guestEmail}</strong>.
+              You do not need an account. If you ever need to reschedule or cancel, use your private management link below.
+            </div>
+          </div>
+
+          <div className="pt-2 flex flex-col sm:flex-row gap-3 justify-center">
+            {confirmedBooking.manageUrl && (
               <Link
                 href={confirmedBooking.manageUrl}
-                className="inline-flex items-center gap-1 text-sm font-semibold text-indigo-600 hover:text-indigo-800 underline"
+                className="inline-flex items-center justify-center space-x-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-lg shadow-sm transition"
               >
-                <span>Open Booking Management Page</span>
-                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Manage Appointment</span>
+                <ArrowRight className="w-4 h-4" />
               </Link>
-            </div>
-          )}
-
-          <div className="pt-4">
+            )}
             <Link
               href="/"
-              className="px-6 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium transition"
+              className="inline-flex items-center justify-center space-x-2 px-6 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg transition"
             >
-              Back to Home
+              <span>Back to Slotbook</span>
             </Link>
           </div>
         </div>
@@ -299,202 +408,176 @@ export default function PublicBookingPage() {
     );
   }
 
-  const selectedDateSlots = selectedDate ? slotsByDate.get(selectedDate) || [] : [];
-
   return (
-    <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-6">
-      {/* Host & Event Details Card */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-        <div className="space-y-1.5">
-          <div className="text-xs font-semibold text-indigo-600 uppercase tracking-wider">
-            {hostData?.name}
-          </div>
-          <h1 className="text-2xl font-bold text-slate-900">{eventData?.name}</h1>
-          <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500 pt-1">
-            <span className="flex items-center gap-1">
-              <Clock className="w-3.5 h-3.5 text-slate-400" />
-              <span>{eventData?.durationMinutes} mins</span>
-            </span>
-            <span>&bull;</span>
-            <span className="flex items-center gap-1">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-              <span>{eventData?.capacity > 1 ? `Group Capacity (${eventData?.capacity})` : "1-on-1 Appointment"}</span>
-            </span>
-          </div>
-        </div>
-
-        {/* Timezone Switcher */}
-        <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-700">
-          <Globe className="w-4 h-4 text-indigo-600 flex-shrink-0" />
-          <span className="uppercase text-[10px] text-slate-500 font-bold">Your Timezone:</span>
-          <select
-            value={guestTz}
-            onChange={(e) => setGuestTz(e.target.value)}
-            className="bg-transparent font-semibold text-slate-900 focus:outline-none cursor-pointer"
-          >
-            {COMMON_TIMEZONES.includes(guestTz) ? null : <option value={guestTz}>{guestTz}</option>}
-            {COMMON_TIMEZONES.map((tz) => (
-              <option key={tz} value={tz}>
-                {tz}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {error && (
-        <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 flex items-center gap-2">
-          <AlertCircle className="w-5 h-5 flex-shrink-0 text-red-600" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      {/* Main Booking Interface */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
-        {/* Left: Available Dates List / Picker */}
-        <div className="md:col-span-5 bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
-          <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-indigo-600" />
-            <span>Select Date (Next 30 Days)</span>
-          </h2>
-
-          {availableDates.length === 0 ? (
-            <div className="p-8 text-center text-xs text-slate-400">
-              No available dates found within booking horizon.
+    <div className="max-w-5xl mx-auto px-4 py-8 sm:py-12">
+      {/* Host / Event Header */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden mb-6">
+        <div className="p-6 sm:p-8 flex flex-col md:flex-row md:items-center justify-between gap-6 border-b border-slate-100">
+          <div>
+            <div className="flex items-center space-x-2 text-xs font-semibold text-indigo-600 uppercase tracking-wider mb-1">
+              <User className="w-3.5 h-3.5" />
+              <span>{hostData?.name}</span>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-1.5 max-h-[420px] overflow-y-auto pr-1">
-              {availableDates.map((dateStr) => {
-                const count = slotsByDate.get(dateStr)?.length || 0;
-                const dateObj = new Date(`${dateStr}T12:00:00Z`);
-                const isSelected = selectedDate === dateStr;
-
-                return (
-                  <button
-                    key={dateStr}
-                    type="button"
-                    onClick={() => setSelectedDate(dateStr)}
-                    className={`w-full text-left px-4 py-2.5 rounded-lg border text-xs font-medium transition flex items-center justify-between ${
-                      isSelected
-                        ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
-                        : "bg-white text-slate-700 border-slate-200 hover:border-indigo-300 hover:bg-slate-50"
-                    }`}
-                  >
-                    <span>
-                      {dateObj.toLocaleDateString("en-US", {
-                        weekday: "short",
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      })}
-                    </span>
-                    <span
-                      className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
-                        isSelected
-                          ? "bg-indigo-700 text-indigo-100"
-                          : "bg-slate-100 text-slate-600"
-                      }`}
-                    >
-                      {count} {count === 1 ? "slot" : "slots"}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* Right: Slots List for Selected Date */}
-        <div className="md:col-span-7 bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-              <Clock className="w-4 h-4 text-indigo-600" />
-              <span>Available Times ({guestTz})</span>
-            </h2>
-            {selectedDate && (
-              <span className="text-xs text-slate-500 font-medium">
-                {new Date(`${selectedDate}T12:00:00Z`).toLocaleDateString("en-US", {
-                  weekday: "short",
-                  month: "short",
-                  day: "numeric",
-                })}
+            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900">{eventData?.name}</h1>
+            <div className="flex flex-wrap items-center gap-4 mt-2 text-sm text-slate-600">
+              <span className="flex items-center gap-1.5">
+                <Clock className="w-4 h-4 text-indigo-600" />
+                <span>{eventData?.durationMinutes} Minutes</span>
               </span>
-            )}
+              {eventData?.capacity > 1 && (
+                <span className="text-xs bg-emerald-50 text-emerald-700 px-2.5 py-0.5 rounded-full font-medium border border-emerald-100">
+                  Group Event (Max {eventData.capacity} guests)
+                </span>
+              )}
+            </div>
           </div>
 
-          {!selectedDate || selectedDateSlots.length === 0 ? (
-            <div className="p-12 text-center text-xs text-slate-400">
-              Select a date on the left to see available times.
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-[420px] overflow-y-auto pr-1">
-              {selectedDateSlots.map((slot) => {
-                const timeString = new Date(slot.startAt).toLocaleTimeString("en-US", {
-                  timeZone: guestTz,
-                  hour: "numeric",
-                  minute: "2-digit",
-                  hour12: true,
-                });
-
-                return (
-                  <button
-                    key={slot.startAt}
-                    type="button"
-                    disabled={isHolding}
-                    onClick={() => handleSelectSlot(slot)}
-                    className="p-3 border border-slate-200 rounded-xl hover:border-indigo-600 hover:bg-indigo-50/50 transition text-center group disabled:opacity-50"
-                  >
-                    <div className="text-sm font-bold text-slate-800 group-hover:text-indigo-700">
-                      {timeString}
-                    </div>
-                    {eventData?.capacity > 1 && (
-                      <div className="text-[10px] text-emerald-600 font-semibold mt-1">
-                        {slot.remainingCapacity} seat{slot.remainingCapacity !== 1 ? "s" : ""} left
-                      </div>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
+          <div className="flex items-center space-x-2">
+            <Globe className="w-4 h-4 text-slate-400" />
+            <select
+              value={guestTz}
+              onChange={(e) => setGuestTz(e.target.value)}
+              className="text-xs font-medium border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              {COMMON_TIMEZONES.map((tz) => (
+                <option key={tz} value={tz}>
+                  {tz}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-      </div>
 
-      {/* 5-Minute Hold Modal */}
-      {activeHold && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-5 animate-in fade-in zoom-in-95 duration-150">
-            {/* Live Hold Timer Bar */}
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center justify-between text-xs text-amber-800">
-              <div className="flex items-center gap-1.5 font-semibold">
-                <Lock className="w-4 h-4 text-amber-600" />
-                <span>Slot Reserved on Temporary Hold</span>
-              </div>
-              <span className="font-mono font-bold bg-amber-200/70 px-2 py-0.5 rounded text-amber-900">
-                {Math.floor(holdSecondsLeft / 60)}:
-                {(holdSecondsLeft % 60).toString().padStart(2, "0")}
-              </span>
+        {error && (
+          <div className="mx-6 sm:mx-8 my-4 p-4 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2.5 text-sm text-red-700">
+            <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+            <span className="leading-snug">{error}</span>
+          </div>
+        )}
+
+        {/* STEP 1: Select Date & Time Slot */}
+        {bookingStep === 1 && (
+          <div className="p-6 sm:p-8 grid grid-cols-1 md:grid-cols-2 gap-8">
+            {/* Left: Available Dates */}
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider mb-4 flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-indigo-600" />
+                <span>1. Select Date</span>
+              </h3>
+
+              {availableDates.length === 0 ? (
+                <div className="p-6 bg-slate-50 border border-slate-200 rounded-xl text-center text-sm text-slate-500">
+                  No available dates in the next {eventData?.bookingHorizonDays || 30} days.
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                  {availableDates.map((dateStr) => {
+                    const isSelected = selectedDate === dateStr;
+                    const dateObj = new Date(dateStr + "T00:00:00");
+                    const slotCount = slotsByDate.get(dateStr)?.length || 0;
+
+                    return (
+                      <button
+                        key={dateStr}
+                        onClick={() => setSelectedDate(dateStr)}
+                        className={`w-full text-left p-3.5 rounded-xl border transition flex items-center justify-between ${
+                          isSelected
+                            ? "bg-indigo-50 border-indigo-600 text-indigo-900 font-semibold shadow-sm"
+                            : "bg-white border-slate-200 hover:border-slate-300 text-slate-800"
+                        }`}
+                      >
+                        <div>
+                          <div className="text-sm">
+                            {dateObj.toLocaleDateString("en-US", {
+                              weekday: "short",
+                              month: "short",
+                              day: "numeric",
+                            })}
+                          </div>
+                          <div className="text-xs text-slate-500">{slotCount} slots available</div>
+                        </div>
+                        <ArrowRight className={`w-4 h-4 ${isSelected ? "text-indigo-600" : "text-slate-300"}`} />
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
-            <div className="space-y-1">
-              <h3 className="text-lg font-bold text-slate-900">Confirm Your Booking</h3>
-              <p className="text-xs text-slate-500">
-                {eventData?.name} with {hostData?.name} &bull;{" "}
-                {new Date(activeHold.startAt).toLocaleTimeString("en-US", {
-                  timeZone: guestTz,
-                  hour: "numeric",
-                  minute: "2-digit",
-                  hour12: true,
-                  month: "short",
-                  day: "numeric",
-                })}
-              </p>
-            </div>
+            {/* Right: Available Slots */}
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider mb-4 flex items-center gap-2">
+                <Clock className="w-4 h-4 text-indigo-600" />
+                <span>2. Select Time ({guestTz})</span>
+              </h3>
 
-            <form onSubmit={handleConfirm} className="space-y-3.5">
+              {!selectedDate || (slotsByDate.get(selectedDate) || []).length === 0 ? (
+                <div className="p-6 bg-slate-50 border border-slate-200 rounded-xl text-center text-sm text-slate-500">
+                  Please select an available date on the left.
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2.5 max-h-96 overflow-y-auto pr-1">
+                  {(slotsByDate.get(selectedDate) || []).map((slot) => {
+                    const timeLabel = new Date(slot.startAt).toLocaleTimeString("en-US", {
+                      timeZone: guestTz,
+                      hour: "numeric",
+                      minute: "2-digit",
+                    });
+
+                    return (
+                      <button
+                        key={slot.startAt}
+                        onClick={() => handleSlotClick(slot)}
+                        className="py-3 px-4 border border-slate-200 hover:border-indigo-600 hover:bg-indigo-50/50 rounded-xl text-sm font-semibold text-slate-800 hover:text-indigo-700 transition flex items-center justify-center shadow-sm"
+                      >
+                        {timeLabel}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* STEP 2: Guest Details Form */}
+        {bookingStep === 2 && selectedSlot && (
+          <div className="p-6 sm:p-8 max-w-xl mx-auto">
+            <button
+              onClick={() => {
+                setBookingStep(1);
+                setError(null);
+              }}
+              className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 mb-6"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              <span>Back to time selection</span>
+            </button>
+
+            <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-4 mb-6 text-xs text-indigo-900 flex items-center justify-between">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                  Your Full Name
+                <span className="font-bold block">{eventData?.name}</span>
+                <span>
+                  {new Date(selectedSlot.startAt).toLocaleString("en-US", {
+                    timeZone: guestTz,
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}{" "}
+                  ({guestTz})
+                </span>
+              </div>
+              <span className="text-xs bg-white px-2.5 py-1 rounded border border-indigo-200 font-semibold">
+                {eventData?.durationMinutes}m
+              </span>
+            </div>
+
+            <form onSubmit={handleRequestHoldAndCode} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Full Name <span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
                   <User className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
@@ -503,15 +586,15 @@ export default function PublicBookingPage() {
                     required
                     value={guestName}
                     onChange={(e) => setGuestName(e.target.value)}
-                    placeholder="Jane Doe"
-                    className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    placeholder="e.g. Tirumalesh"
+                    className="w-full pl-9 pr-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                  Your Email Address
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Email Address <span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
                   <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
@@ -520,32 +603,110 @@ export default function PublicBookingPage() {
                     required
                     value={guestEmail}
                     onChange={(e) => setGuestEmail(e.target.value)}
-                    placeholder="jane@example.com"
-                    className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    placeholder="you@example.com"
+                    className="w-full pl-9 pr-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  A 6-digit verification code will be sent to this email to verify your booking.
+                </p>
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setActiveHold(null)}
-                  className="px-4 py-2 border border-slate-300 rounded-lg text-xs font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={confirming}
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition shadow-sm disabled:opacity-50"
-                >
-                  {confirming ? "Confirming..." : "Confirm Booking"}
-                </button>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Meeting Purpose / Agenda <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  required
+                  rows={3}
+                  value={meetingPurpose}
+                  onChange={(e) => setMeetingPurpose(e.target.value)}
+                  placeholder="Briefly explain what you would like to discuss during this appointment."
+                  className="w-full p-3 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
               </div>
+
+              <button
+                type="submit"
+                disabled={isRequestingCode}
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold rounded-xl text-sm shadow-sm transition flex items-center justify-center space-x-2"
+              >
+                {isRequestingCode ? (
+                  <span>Reserving slot &amp; sending code...</span>
+                ) : (
+                  <>
+                    <span>Continue to Verification</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
             </form>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* STEP 3: OTP Verification Form */}
+        {bookingStep === 3 && activeHold && (
+          <div className="p-6 sm:p-8 max-w-md mx-auto text-center space-y-6">
+            <div className="w-12 h-12 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto border border-indigo-100">
+              <KeyRound className="w-6 h-6" />
+            </div>
+
+            <div>
+              <h2 className="text-xl font-bold text-slate-900">Verify Your Email</h2>
+              <p className="text-xs text-slate-600 mt-1">
+                We sent a 6-digit code to <strong>{guestEmail}</strong>.
+              </p>
+            </div>
+
+            {/* 5-minute countdown */}
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 border border-amber-200 rounded-full text-xs font-semibold text-amber-800">
+              <Clock className="w-3.5 h-3.5" />
+              <span>
+                Slot reserved for: {Math.floor(holdSecondsLeft / 60)}:
+                {String(holdSecondsLeft % 60).padStart(2, "0")}
+              </span>
+            </div>
+
+            <form onSubmit={handleConfirmWithOtp} className="space-y-4">
+              <div>
+                <input
+                  type="text"
+                  maxLength={6}
+                  required
+                  autoFocus
+                  value={verificationCode}
+                  onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, ""))}
+                  placeholder="••••••"
+                  className="w-48 mx-auto text-center tracking-[0.5em] text-2xl font-bold py-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={isVerifying || verificationCode.length !== 6}
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold rounded-xl text-sm shadow-sm transition flex items-center justify-center space-x-2"
+              >
+                {isVerifying ? <span>Confirming booking...</span> : <span>Confirm Appointment</span>}
+              </button>
+            </form>
+
+            <div className="pt-2 text-xs text-slate-500">
+              Didn't receive the code?{" "}
+              {resendCooldown > 0 ? (
+                <span className="text-slate-400">Resend in {resendCooldown}s</span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleResendCode}
+                  className="text-indigo-600 font-semibold hover:underline"
+                >
+                  Resend code
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

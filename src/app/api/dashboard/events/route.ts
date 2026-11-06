@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getSession } from "@/lib/auth";
 import { getPool } from "@/db";
 import { eventTypeSchema } from "@/lib/validations";
+import { NotificationService } from "@/lib/notification-service";
 import { apiSuccess, apiError } from "@/lib/api-utils";
 import { AppError } from "@/lib/booking-service";
 
@@ -73,7 +74,30 @@ export async function POST(request: NextRequest) {
       ]
     );
 
-    return apiSuccess({ eventType: res.rows[0] }, 201);
+    const newEvent = res.rows[0];
+
+    // Notification: send only to host
+    const client = await pool.connect();
+    try {
+      await NotificationService.enqueue(client, {
+        eventType: "EVENT_CREATED",
+        recipientEmail: session.email,
+        subject: `New Event Created: ${newEvent.name}`,
+        payload: {
+          eventName: newEvent.name,
+          hostName: session.name,
+          hostEmail: session.email,
+          durationMinutes: newEvent.durationMinutes,
+        },
+      });
+      NotificationService.processOutbox().catch((e) =>
+        console.error("Outbox process error:", e.message)
+      );
+    } finally {
+      client.release();
+    }
+
+    return apiSuccess({ eventType: newEvent }, 201);
   } catch (err) {
     return apiError(err);
   }

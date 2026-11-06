@@ -16,7 +16,7 @@ done
 echo "==> Database is ready! Running migrations..."
 npm run db:migrate
 
-echo "==> Seeding database with demo host and events..."
+echo "==> Checking database initialization (seeding only if uninitialized)..."
 npm run db:seed
 
 echo "==> Starting Slotbook application server..."
