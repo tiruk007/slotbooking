@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { NextResponse } from "next/server";
 import { getPool } from "@/db";
 import { runMigrations } from "@/db/migrate";
 import { OtpService } from "@/lib/otp-service";
-import { createHostSession, getSessionByToken, clearSessionCookie, hashToken } from "@/lib/auth";
+import { createHostSession, getSessionByToken, clearSessionCookie, hashToken, attachSessionCookie, removeSessionCookie } from "@/lib/auth";
 import { BookingService } from "@/lib/booking-service";
 import { NotificationService } from "@/lib/notification-service";
 import { DateTime } from "luxon";
@@ -176,6 +177,33 @@ describe("Phase 14: Authentication, Database Cleanup, Notifications & Booking Wo
           customUrl: testDbUrl,
         })
       ).rejects.toThrow();
+    });
+
+    it("attaches secure session cookie and enables successful authentication", async () => {
+      const pool = getPool(testDbUrl);
+      const hostRes = await pool.query(
+        `INSERT INTO hosts (name, email, slug, home_timezone, status)
+         VALUES ('Cookie Tester', 'cookie@example.com', 'cookie-tester', 'UTC', 'ACTIVE')
+         RETURNING id`
+      );
+      const hostId = hostRes.rows[0].id;
+      const { token } = await createHostSession(hostId, testDbUrl);
+
+      // Verify attachSessionCookie
+      const res = NextResponse.json({ success: true, redirectTo: "/host/dashboard" });
+      attachSessionCookie(res, token);
+
+      const setCookie = res.headers.get("set-cookie");
+      expect(setCookie).toContain("slotbook_session=");
+      expect(setCookie).toContain("Path=/");
+      expect(setCookie).toContain("HttpOnly");
+
+      // Verify removeSessionCookie
+      const logoutRes = NextResponse.json({ success: true });
+      removeSessionCookie(logoutRes);
+      const logoutSetCookie = logoutRes.headers.get("set-cookie");
+      expect(logoutSetCookie).toContain("slotbook_session=");
+      expect(logoutSetCookie).toMatch(/Max-Age=0|expires=/i);
     });
   });
 

@@ -25,11 +25,35 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return bcrypt.compare(password, hash);
 }
 
-function isSecureCookie(): boolean {
+export function isSecureCookie(): boolean {
   if (process.env.COOKIE_SECURE === "true") return true;
   if (process.env.COOKIE_SECURE === "false") return false;
   const appUrl = process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "";
   return appUrl.startsWith("https://");
+}
+
+export function getSessionCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: isSecureCookie(),
+    sameSite: "lax" as const,
+    path: "/",
+    maxAge: 60 * 60 * 24 * 7, // 7 days
+  };
+}
+
+export function attachSessionCookie(response: any, token: string): any {
+  response.cookies.set(SESSION_COOKIE_NAME, token, getSessionCookieOptions());
+  return response;
+}
+
+export function removeSessionCookie(response: any): any {
+  response.cookies.delete(SESSION_COOKIE_NAME);
+  response.cookies.set(SESSION_COOKIE_NAME, "", {
+    ...getSessionCookieOptions(),
+    maxAge: 0,
+  });
+  return response;
 }
 
 /**

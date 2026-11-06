@@ -41,6 +41,7 @@ function HostVerifyOtpContent() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, code }),
+        credentials: "include",
       });
 
       const data = await res.json();
@@ -48,14 +49,17 @@ function HostVerifyOtpContent() {
         throw new Error(data.error?.message || "Verification failed");
       }
 
-      if (purpose === "register") {
-        setSuccessMsg("Host account created successfully! Redirecting to sign in...");
-        setTimeout(() => {
-          router.push("/host/login");
-        }, 1500);
-      } else {
-        router.push("/host/dashboard");
-      }
+      setSuccessMsg(
+        purpose === "register"
+          ? "Account verified! Opening your Host Portal..."
+          : "Verification successful! Opening your Host Portal..."
+      );
+
+      const destination = data.redirectTo || data.data?.redirectTo || "/host/dashboard";
+      // Perform clean full-page navigation so browser flushes cookies and initializes layout session
+      setTimeout(() => {
+        window.location.href = destination;
+      }, 500);
     } catch (err: any) {
       setError(err.message || "Invalid or expired code");
     } finally {

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   Calendar,
@@ -30,7 +30,6 @@ export default function HostPortalLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
   const [host, setHost] = useState<HostSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -43,21 +42,24 @@ export default function HostPortalLayout({
   useEffect(() => {
     async function checkAuth() {
       try {
-        const res = await fetch("/api/auth/me");
+        const res = await fetch("/api/auth/me", {
+          credentials: "include",
+          cache: "no-store",
+        });
         if (res.ok) {
           const data = await res.json();
           const hostSession = data?.data?.host || data?.host;
           if (hostSession) {
             setHost(hostSession);
           } else if (!isAuthRoute) {
-            router.push(`/host/login?returnUrl=${encodeURIComponent(pathname)}`);
+            window.location.href = `/host/login?returnUrl=${encodeURIComponent(pathname)}`;
           }
         } else if (!isAuthRoute) {
-          router.push(`/host/login?returnUrl=${encodeURIComponent(pathname)}`);
+          window.location.href = `/host/login?returnUrl=${encodeURIComponent(pathname)}`;
         }
       } catch {
         if (!isAuthRoute) {
-          router.push("/host/login");
+          window.location.href = "/host/login";
         }
       } finally {
         setLoading(false);
@@ -65,13 +67,13 @@ export default function HostPortalLayout({
     }
 
     checkAuth();
-  }, [pathname, isAuthRoute, router]);
+  }, [pathname, isAuthRoute]);
 
   async function handleLogout() {
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     } finally {
-      router.push("/host/login");
+      window.location.href = "/host/login";
     }
   }
 

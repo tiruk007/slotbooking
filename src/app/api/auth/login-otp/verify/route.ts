@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { OtpService } from "@/lib/otp-service";
 import { getPool } from "@/db";
-import { setSessionCookie } from "@/lib/auth";
+import { createHostSession, attachSessionCookie } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/api-utils";
 import { AppError } from "@/lib/booking-service";
 
@@ -40,16 +40,22 @@ export async function POST(request: NextRequest) {
       throw new AppError("ACCOUNT_INACTIVE", 403, "This host account is inactive.");
     }
 
-    const hostSession = {
-      id: host.id,
-      name: host.name,
-      email: host.email,
-      homeTimezone: host.home_timezone,
-    };
+    // Create session in host_sessions and obtain secure token
+    const { token, host: hostSession } = await createHostSession(host.id);
 
-    await setSessionCookie(hostSession);
+    const response = apiSuccess(
+      {
+        host: hostSession,
+        redirectTo: "/host/dashboard",
+        message: "Signed in successfully",
+      },
+      200
+    );
 
-    return apiSuccess({ host: hostSession, message: "Signed in successfully" }, 200);
+    // Explicitly attach Set-Cookie header on outgoing HTTP response
+    attachSessionCookie(response, token);
+
+    return response;
   } catch (err) {
     return apiError(err);
   }

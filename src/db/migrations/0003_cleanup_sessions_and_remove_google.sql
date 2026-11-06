@@ -46,3 +46,4 @@ ALTER TABLE notification_outbox ADD CONSTRAINT chk_notification_event_types
 
 -- 4. Clean up legacy seeded demo host Alex Chen and associated demo records
 DELETE FROM hosts WHERE email = 'alex@slotbook.dev';
+

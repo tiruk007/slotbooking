@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { OtpService } from "@/lib/otp-service";
 import { getPool, withTransaction } from "@/db";
+import { createHostSession, attachSessionCookie } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/api-utils";
 import { AppError } from "@/lib/booking-service";
 
@@ -31,7 +32,7 @@ export async function POST(request: NextRequest) {
     const homeTimezone = metadata.homeTimezone || "UTC";
 
     // Create host and initial configuration in a transaction
-    const host = await withTransaction(pool, async (client) => {
+    const newHost = await withTransaction(pool, async (client) => {
       // Re-verify no collision
       const checkRes = await client.query(
         "SELECT id FROM hosts WHERE LOWER(email) = LOWER($1)",
@@ -58,32 +59,43 @@ export async function POST(request: NextRequest) {
          RETURNING id, name, email, slug, home_timezone`,
         [hostName, normalizedEmail, hostSlug, homeTimezone]
       );
-      const newHost = hostRes.rows[0];
+      const hostRow = hostRes.rows[0];
 
       // 2. Set up standard default weekly availability (Mon - Fri, 09:00-17:00) so host has a schedule
       for (let weekday = 1; weekday <= 5; weekday++) {
         await client.query(
           `INSERT INTO availability_rules (host_id, weekday, start_time, end_time)
            VALUES ($1, $2, '09:00:00', '17:00:00')`,
-          [newHost.id, weekday]
+          [hostRow.id, weekday]
         );
       }
 
       // NOTE: Strictly ZERO default event types, fake bookings, or fake notifications are created.
       return {
-        id: newHost.id,
-        name: newHost.name,
-        email: newHost.email,
-        slug: newHost.slug,
-        homeTimezone: newHost.home_timezone,
+        id: hostRow.id,
+        name: hostRow.name,
+        email: hostRow.email,
+        slug: hostRow.slug,
+        homeTimezone: hostRow.home_timezone,
       };
     });
 
-    return apiSuccess({
-      host,
-      redirectTo: "/host/login",
-      message: "Host account created and verified successfully. Please log in to your Host Portal."
-    }, 201);
+    // Create session in host_sessions and obtain session token
+    const { token, host: hostSession } = await createHostSession(newHost.id);
+
+    const response = apiSuccess(
+      {
+        host: hostSession,
+        redirectTo: "/host/dashboard",
+        message: "Host account created and verified successfully. Welcome to your Host Portal.",
+      },
+      201
+    );
+
+    // Explicitly attach Set-Cookie header on outgoing HTTP response
+    attachSessionCookie(response, token);
+
+    return response;
   } catch (err) {
     return apiError(err);
   }
