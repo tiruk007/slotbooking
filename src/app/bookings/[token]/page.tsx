@@ -262,27 +262,10 @@ export default function BookingManagementPage() {
           </div>
         )}
 
-        {/* Meet Link */}
-        {booking.meetLink ? (
-          <div className="flex items-center justify-between bg-indigo-50/70 border border-indigo-100 rounded-xl p-4">
-            <div className="flex items-center gap-2 text-indigo-900 font-medium text-sm">
-              <Globe className="w-4 h-4 text-indigo-600" />
-              <span>Google Meet Video Call</span>
-            </div>
-            <a
-              href={booking.meetLink}
-              target="_blank"
-              rel="noreferrer"
-              className="text-xs font-semibold bg-indigo-600 text-white px-3 py-1.5 rounded-lg hover:bg-indigo-700 shadow-sm"
-            >
-              Join Call
-            </a>
-          </div>
-        ) : (
-          <div className="text-xs text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-100">
-            <strong>Meeting Location:</strong> The host will provide meeting video details prior to the call.
-          </div>
-        )}
+        {/* Meeting Location / Details */}
+        <div className="text-xs text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-100">
+          <strong>Meeting Coordination:</strong> The host and guest coordinate directly using the contact details above.
+        </div>
 
         {booking.cancellationReason && (
           <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 space-y-1">

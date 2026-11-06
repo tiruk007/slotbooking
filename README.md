@@ -20,11 +20,12 @@ Slotbook connects hosts and guests effortlessly across two completely separate a
 
 ### B. Private Host Portal
 1. **Authentication (`/host/login`, `/host/signup`, `/host/verify-otp`)**: Dedicated host auth flow with passwordless email OTP. New registration creates **only** the host account and default schedule settings—zero automatic dummy events, zero fake bookings, and zero fake notifications.
-2. **Host Dashboard (`/host/dashboard`)**: Dedicated overview showing key statistics, upcoming bookings, and quick action cards.
-3. **My Events (`/host/events`, `/host/events/new`, `/host/events/[id]/edit`)**: Complete event management with categories, publish status (`PUBLISHED`, `DRAFT`, `INACTIVE`), durations, capacity, and buffers.
-4. **Availability & Overrides (`/host/availability`)**: Weekly working hours plus specific date overrides with conflict detection.
-5. **Bookings (`/host/bookings`)**: Real-time filterable bookings list with cancellation controls.
-6. **Settings & Integrations (`/host/settings`, `/host/settings/integrations`)**: Profile, timezone configuration, account deletion with OTP, and dedicated per-host Google Calendar OAuth integration.
+2. **Persistent Host Sessions (`host_sessions`)**: Cryptographic session tokens hashed with SHA-256 and verified in the database with 7-day expiration and server-side revocation on logout. Survives page refreshes and multi-tab navigation.
+3. **Host Dashboard (`/host/dashboard`)**: Dedicated overview showing key statistics, upcoming bookings, and quick action cards.
+4. **My Events (`/host/events`, `/host/events/new`, `/host/events/[id]/edit`)**: Complete event management with categories, publish status (`PUBLISHED`, `DRAFT`, `INACTIVE`), durations, capacity, and buffers.
+5. **Availability & Overrides (`/host/availability`)**: Weekly working hours plus specific date overrides with conflict detection.
+6. **Bookings (`/host/bookings`)**: Real-time filterable bookings list with cancellation controls.
+7. **Settings (`/host/settings`)**: Profile, timezone configuration, and account deletion with email OTP verification.
 
 ---
 
@@ -34,10 +35,10 @@ Slotbook connects hosts and guests effortlessly across two completely separate a
 |---|---|---|
 | **Separate Experiences** | Isolated Public vs Host | Clean separation of layouts, navigation guards, and session state. Public navbar "Hosts Login" opens host portal in a new tab. |
 | **Clean Host Registration** | Zero Dummy Events | Registering as a host creates strictly the host profile and default schedule settings. Zero fake bookings, zero dummy events. |
-| **Per-Host Google OAuth** | Personal Google Meet | Hosts connect their personal Google account from `/host/settings/integrations`. Stored encrypted/hashed per host, generating real Google Meet links on confirmation. |
-| **Public Discovery** | Real PostgreSQL Events | Homepage queries the latest 3 published events dynamically; `/events` enables searching published events. |
-| **Host Authentication** | Passwordless Email OTP | 6-digit cryptographically secure OTP, SHA-256 hash storage, 5-minute expiry, 30s resend cooldown, 5 attempt maximum. |
-| **Guest Verification** | Mandatory Email Verification | 6-digit OTP delivered via email before final booking confirmation. Stale holds auto-expire after 5 minutes. |
+| **Persistent Host Sessions** | Database-Backed Auth | `host_sessions` table with SHA-256 token hashing, 7-day expiry, and instant server-side revocation on logout. |
+| **Administrative Email Bridge** | Outgoing SMTP Sender | `host7890123@gmail.com` serves strictly as the transactional SMTP notification bridge. It is never a host or event owner. |
+| **Email-Only Guest Flow** | Zero Guest Accounts | Guests verify bookings via short-lived 5-minute email OTP and receive self-service management links. |
+| **Private Management Links** | Reschedule & Cancel | `${APP_BASE_URL}/booking/{token}` generated with SHA-256 token hashing for self-service guest management. |
 | **Concurrency & Double-Booking Protection** | Zero Double-Bookings | PostgreSQL `btree_gist` exclusion constraints for 1-on-1 bookings and serialized `SELECT ... FOR UPDATE` row locks for group capacity. |
 | **Cross-Event Buffer Enforcement** | Dedicated Meeting Spacing | Before-buffers and after-buffers are strictly enforced across both adjacent meetings and different event types for the same host. |
 | **Daily Duplicate Protection** | 1 Active Booking / Day | Enforces at most one active booking (`HELD` or `CONFIRMED`) per guest email, per event type, per host-local calendar day via PostgreSQL partial unique index. |
@@ -231,17 +232,25 @@ All tests run against a real PostgreSQL database with zero mocking of database c
 npm test
 ```
 
-### Test Suites Included:
+### Test Suites Included (5 Suites, 51 Passing Tests):
+- **`tests/auth_and_notification.test.ts`**:
+  - Host signup and login OTP generation with secure hashing.
+  - Persistent database sessions in `host_sessions` table with SHA-256 token hashing.
+  - Multi-tab and refresh session persistence.
+  - Session revocation on logout and rejection of expired/revoked sessions.
+  - Database cleanup: zero Alex Chen records, notification mailbox is not a host.
+  - Foreign key cascading integrity.
+  - Multi-host isolation (hosts cannot see or modify other hosts' bookings).
+  - Guest booking lifecycle with private `${APP_BASE_URL}/booking/{token}` management links.
+  - Outbox notification idempotency and retry handling.
 - **`tests/workflow.test.ts`**:
-  - Tests all 20 requirements from the Final Product Workflow specification.
+  - Tests requirements from the Final Product Workflow specification.
   - Zero default events, fake bookings, or fake notifications on host signup.
   - Separate host portal routing and login redirect.
-  - Per-host Google Calendar OAuth and Google Meet link generation with fallback.
-  - Multi-host isolation (hosts cannot see or modify other hosts' events/bookings).
-  - Public event discovery API and guest booking lifecycle via `/book/[host-slug]/[event-slug]`.
+  - Removal of obsolete Google integration columns and dependencies.
+  - Multi-host isolation and public event discovery API.
   - Dynamic homepage queries (handles 3, 2, 1, or 0 published events gracefully).
-  - Private guest booking management via `/booking/[token]`.
-  - Database schema integrity: partial unique index, GiST exclusion constraints, and outbox isolation.
+  - Minimum notice and booking horizon enforcement.
 - **`tests/concurrency.test.ts`**:
   - Capacity = 1 exclusion: 20 simultaneous concurrent requests &rarr; exactly 1 succeeds, 19 fail with HTTP 409.
   - Capacity > 1 locking: 20 simultaneous requests for capacity = 3 &rarr; exactly 3 succeed, 17 fail with HTTP 409.
@@ -270,20 +279,20 @@ Configure the following variables in your `.env` file:
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/slotbook
 TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/slotbook_test
 
-# Application URL
+# Application Base URL (Used for generating guest management links)
+APP_BASE_URL=http://localhost:3000
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 # Authentication Session Secret (at least 32 characters)
 SESSION_SECRET=slotbook_production_secure_secret_key_at_least_32_characters_long_for_session
 
-# Gmail SMTP Configuration
-GMAIL_USER=your-email@gmail.com
+# Gmail SMTP Email Notification Bridge
+GMAIL_USER=host7890123@gmail.com
 GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
+MAIL_FROM=host7890123@gmail.com
 
-# Google OAuth Credentials for Google Meet (optional)
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
-GOOGLE_REFRESH_TOKEN=
+# Cookie Configuration for Local Development (false for HTTP localhost)
+COOKIE_SECURE=false
 ```
 
 ---

@@ -50,8 +50,11 @@ export default function HostSettingsPage() {
         const res = await fetch("/api/auth/me");
         if (res.ok) {
           const d = await res.json();
-          setHost(d.data.host);
-          setHomeTimezone(d.data.host.homeTimezone || "UTC");
+          const hostData = d?.data?.host || d?.host;
+          if (hostData) {
+            setHost(hostData);
+            setHomeTimezone(hostData.homeTimezone || "UTC");
+          }
         }
       } catch (err) {
         console.error("Failed to load host profile:", err);
@@ -210,26 +213,6 @@ export default function HostSettingsPage() {
         </div>
       </div>
 
-      {/* Integrations Card Shortcut */}
-      <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-xs flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="p-3 rounded-2xl bg-indigo-50 text-indigo-600">
-            <Link2 className="w-6 h-6" />
-          </div>
-          <div>
-            <h3 className="text-base font-bold text-slate-900">Google Calendar &amp; Meet Integration</h3>
-            <p className="text-xs text-slate-500">Connect your Google account to automatically generate video conference links.</p>
-          </div>
-        </div>
-
-        <Link
-          href="/host/settings/integrations"
-          className="px-4 py-2 border border-slate-300 hover:bg-slate-50 rounded-xl text-xs font-semibold transition"
-        >
-          Manage Integrations
-        </Link>
-      </div>
-
       {/* Danger Zone: Account Deletion */}
       <div className="bg-white rounded-3xl border border-red-200 p-6 sm:p-8 shadow-xs space-y-6">
         <div className="flex items-start gap-3">
@@ -319,3 +302,4 @@ export default function HostSettingsPage() {
     </div>
   );
 }
+

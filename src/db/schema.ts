@@ -29,13 +29,26 @@ export const hosts = pgTable("hosts", {
   passwordHash: text("password_hash"),
   homeTimezone: text("home_timezone").notNull().default("UTC"),
   status: text("status").notNull().default("ACTIVE"),
-  googleRefreshToken: text("google_refresh_token"),
-  googleAccessToken: text("google_access_token"),
-  googleTokenExpiry: timestamp("google_token_expiry", { withTimezone: true }),
-  googleEmail: text("google_email"),
-  googleConnectedAt: timestamp("google_connected_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const hostSessions = pgTable(
+  "host_sessions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    hostId: uuid("host_id")
+      .notNull()
+      .references(() => hosts.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull().unique(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => ({
+    tokenHashIdx: index("idx_host_sessions_token_hash").on(table.tokenHash),
+    hostIdIdx: index("idx_host_sessions_host_id").on(table.hostId),
+  })
+);
 
 export const eventTypes = pgTable(
   "event_types",
@@ -115,7 +128,6 @@ export const bookings = pgTable(
     cancellationReason: text("cancellation_reason"),
     manageTokenHash: text("manage_token_hash").unique(),
     meetLink: text("meet_link"),
-    googleCalendarEventId: text("google_calendar_event_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -185,6 +197,7 @@ export const notificationOutbox = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     bookingId: uuid("booking_id").references(() => bookings.id, { onDelete: "set null" }),
+    relatedHostId: uuid("related_host_id").references(() => hosts.id, { onDelete: "set null" }),
     eventType: text("event_type").notNull(),
     recipientEmail: text("recipient_email"),
     subject: text("subject"),
@@ -205,6 +218,7 @@ export const hostsRelations = relations(hosts, ({ many }) => ({
   eventTypes: many(eventTypes),
   availabilityRules: many(availabilityRules),
   dateOverrides: many(dateOverrides),
+  sessions: many(hostSessions),
 }));
 
 export const eventTypesRelations = relations(eventTypes, ({ one, many }) => ({

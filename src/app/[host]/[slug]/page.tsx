@@ -355,26 +355,9 @@ export default function PublicBookingPage() {
             </div>
 
             <div className="pt-2 border-t border-slate-200">
-              {confirmedBooking.meetLink ? (
-                <div className="flex items-center justify-between bg-white border border-indigo-100 rounded-lg p-3">
-                  <div className="flex items-center gap-2 text-indigo-700 font-medium">
-                    <Globe className="w-4 h-4" />
-                    <span>Google Meet video conference ready</span>
-                  </div>
-                  <a
-                    href={confirmedBooking.meetLink}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs font-semibold bg-indigo-600 text-white px-3 py-1.5 rounded hover:bg-indigo-700"
-                  >
-                    Join Meet
-                  </a>
-                </div>
-              ) : (
-                <div className="text-xs text-slate-500 bg-slate-100/70 p-3 rounded-lg">
-                  <strong>Meeting Location:</strong> The host will share the video conference link prior to the appointment.
-                </div>
-              )}
+              <div className="text-xs text-slate-500 bg-slate-100/70 p-3 rounded-lg">
+                <strong>Appointment Status:</strong> Confirmed. You and the host can coordinate directly using the contact details above.
+              </div>
             </div>
           </div>
 

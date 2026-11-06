@@ -156,7 +156,54 @@ During implementation and test suite verification, several issues were identifie
 - Verified `npm run build` succeeds cleanly across all 27 static and dynamic routes.
 
 
-1. **Concurrency and Exclusion (24 Automated Tests Passed)**:
+---
+
+## 7. Authentication, Database Cleanup, Email Bridge & Booking Workflow Repair
+
+### Root Causes Identified
+1. **Host Login Persistence Failure**:
+   - `src/app/host/layout.tsx` evaluated `data.data.host` upon `fetch("/api/auth/me")`. Because `apiSuccess` returned `{ host: ... }` directly, `data.data` was `undefined`, which threw a `TypeError: Cannot read properties of undefined (reading 'host')`.
+   - The unhandled exception was caught by the enclosing `catch` block, immediately triggering `router.push("/host/login")`.
+   - Additionally, `secure: process.env.NODE_ENV === "production"` caused cookies to be rejected over plain HTTP localhost in Docker Compose.
+   - Sessions were stored purely as stateless JWT cookies without database tracking or revocation capability.
+   - *Fix*:
+     - Created `host_sessions` table with SHA-256 token hashing, 7-day expiration, and server-side revocation on logout.
+     - Updated cookie settings to only enforce `secure: true` on genuine HTTPS or via `COOKIE_SECURE=true`, allowing reliable HTTP localhost operation.
+     - Updated `apiSuccess` to guarantee `{ data: ..., ...data }` envelope compatibility.
+     - Updated all host pages to safely access `data?.data?.host || data?.host`.
+
+2. **Alex Chen Seeded Demo Host Removal**:
+   - Migration `0003_cleanup_sessions_and_remove_google.sql` deleted `alex@slotbook.dev`, cascading deletion cleanly across demo event types, availability rules, and date overrides.
+   - Updated `src/db/seed.ts` to strictly perform connectivity and migration health checks without inserting demo hosts or fake events.
+
+3. **Administrative Mailbox Role**:
+   - `host7890123@gmail.com` is configured strictly as the outgoing SMTP notification bridge (`MAIL_FROM`, `GMAIL_USER`).
+   - It is never inserted into `hosts` and never assigned bookings.
+
+4. **Complete Removal of Google Meet & Calendar**:
+   - Dropped obsolete columns: `google_refresh_token`, `google_access_token`, `google_token_expiry`, `google_email`, `google_connected_at` from `hosts`, and `google_calendar_event_id` from `bookings`.
+   - Removed obsolete routes: `/api/auth/google/*`, `/api/host/google/*`, and `/host/settings/integrations`.
+   - Removed Google Meet wording and UI cards from homepage, `become-a-host`, booking pages, and dashboard.
+   - Simplified `MeetService` to return `null` without fabricating URLs.
+
+5. **Guest Private Management Links & Base URL**:
+   - Generated private self-service links via `${APP_BASE_URL}/booking/{token}` (defaulting to `http://localhost:3000`).
+   - Stored tokens as SHA-256 hashes in `bookings.manage_token_hash`.
+
+6. **Notification Engine & Domain Events**:
+   - Enhanced `notification_outbox` with `related_host_id` and check constraints for 8 domain events:
+     `HOST_SIGNUP_OTP`, `HOST_LOGIN_OTP`, `GUEST_EMAIL_VERIFICATION_OTP`, `BOOKING_CONFIRMED`, `BOOKING_RESCHEDULED`, `BOOKING_CANCELLED`, `HOST_CANCELLED_BOOKING`, `EVENT_CANCELLED`.
+   - Built outbox worker with retry count tracking and idempotent delivery.
+
+### Comprehensive Test Suite Execution
+- **5 Test Suites, 51 Passing Tests**:
+  - `tests/auth_and_notification.test.ts` (12 tests passing)
+  - `tests/workflow.test.ts` (15 tests passing)
+  - `tests/transformation.test.ts` (14 tests passing)
+  - `tests/concurrency.test.ts` (9 tests passing)
+  - `tests/api.test.ts` (1 test passing)
+- Production Next.js build (`npm run build`) succeeded across all 26 routes with 0 errors.
+
    - 20 concurrent requests against a capacity = 1 slot: exactly 1 succeeded, 19 failed with HTTP 409.
    - 20 concurrent requests against a capacity = 3 slot: exactly 3 succeeded, 17 failed with HTTP 409.
    - Idempotency replays verified with identical and conflicting payloads.

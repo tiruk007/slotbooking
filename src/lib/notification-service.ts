@@ -1,11 +1,16 @@
-import { Pool, PoolClient } from "pg";
+import { PoolClient } from "pg";
 import { getPool } from "@/db";
 import { EmailService } from "./email-service";
 
 export type DomainEventType =
+  | "HOST_SIGNUP_OTP"
+  | "HOST_LOGIN_OTP"
+  | "GUEST_EMAIL_VERIFICATION_OTP"
   | "BOOKING_CONFIRMED"
   | "BOOKING_RESCHEDULED"
   | "BOOKING_CANCELLED"
+  | "HOST_CANCELLED_BOOKING"
+  | "EVENT_CANCELLED"
   | "HOST_CANCELLED_EVENT"
   | "EVENT_CREATED"
   | "EVENT_UPDATED"
@@ -28,9 +33,10 @@ export interface OutboxPayload {
   guestTimezone?: string;
   previousStartAt?: string;
   newStartAt?: string;
+  newEndAt?: string;
   cancellationReason?: string;
   manageUrl?: string;
-  meetLink?: string | null;
+  code?: string;
   [key: string]: any;
 }
 
@@ -42,19 +48,20 @@ export class NotificationService {
     client: PoolClient,
     params: {
       bookingId?: string | null;
+      relatedHostId?: string | null;
       eventType: DomainEventType;
       recipientEmail: string;
       subject: string;
       payload: OutboxPayload;
     }
   ) {
-    const { bookingId, eventType, recipientEmail, subject, payload } = params;
+    const { bookingId, relatedHostId, eventType, recipientEmail, subject, payload } = params;
 
     await client.query(
       `INSERT INTO notification_outbox 
-       (booking_id, event_type, recipient_email, subject, payload, delivery_status, attempt_count)
-       VALUES ($1, $2, $3, $4, $5, 'PENDING', 0)`,
-      [bookingId || null, eventType, recipientEmail, subject, JSON.stringify(payload)]
+       (booking_id, related_host_id, event_type, recipient_email, subject, payload, delivery_status, attempt_count)
+       VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 0)`,
+      [bookingId || null, relatedHostId || null, eventType, recipientEmail, subject, JSON.stringify(payload)]
     );
   }
 
@@ -69,7 +76,7 @@ export class NotificationService {
     let failed = 0;
 
     const res = await pool.query(
-      `SELECT id, booking_id, event_type, recipient_email, subject, payload, attempt_count
+      `SELECT id, booking_id, related_host_id, event_type, recipient_email, subject, payload, attempt_count
        FROM notification_outbox
        WHERE delivery_status IN ('PENDING', 'FAILED')
          AND attempt_count < 5
@@ -118,17 +125,57 @@ export class NotificationService {
    * Renders professional HTML and plain text templates for each domain event.
    */
   static renderEmail(eventType: DomainEventType, p: OutboxPayload): { text: string; html: string } {
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-    const fullManageUrl = p.manageUrl ? `${appUrl}${p.manageUrl}` : "";
-    const meetNote = p.meetLink
-      ? `<p style="margin: 8px 0;"><strong>Google Meet:</strong> <a href="${p.meetLink}" style="color: #4f46e5;">Join Meeting</a></p>`
-      : `<p style="margin: 8px 0; color: #64748b;"><strong>Meeting Link:</strong> The host will share the meeting details prior to the call.</p>`;
-
-    const textMeetNote = p.meetLink
-      ? `Google Meet: ${p.meetLink}`
-      : `Meeting Link: The host will share the meeting details prior to the call.`;
+    const appUrl = (process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").replace(/\/$/, "");
+    const fullManageUrl = p.manageUrl
+      ? (p.manageUrl.startsWith("http") ? p.manageUrl : `${appUrl}${p.manageUrl.startsWith("/") ? "" : "/"}${p.manageUrl}`)
+      : "";
 
     switch (eventType) {
+      case "HOST_SIGNUP_OTP":
+      case "HOST_LOGIN_OTP":
+      case "GUEST_EMAIL_VERIFICATION_OTP": {
+        const title =
+          eventType === "HOST_SIGNUP_OTP"
+            ? "Host Account Registration"
+            : eventType === "HOST_LOGIN_OTP"
+            ? "Host Sign In"
+            : "Verify Your Appointment";
+        const code = p.code || "------";
+
+        const text = `
+Slotbook ${title}
+
+Your 6-digit verification code is: ${code}
+
+This code will expire in 5 minutes. If you did not request this verification, you can safely ignore this email.
+        `.trim();
+
+        const html = `
+<!DOCTYPE html>
+<html>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
+  <div style="max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); text-align: center;">
+    <h2 style="color: #4f46e5; margin: 0 0 8px 0; font-size: 24px;">Slotbook</h2>
+    <p style="color: #64748b; font-size: 14px; margin-top: 0;">${title}</p>
+    <div style="margin: 32px 0;">
+      <div style="font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #1e293b; background: #f1f5f9; padding: 16px 24px; border-radius: 8px; display: inline-block; border: 1px dashed #cbd5e1;">
+        ${code}
+      </div>
+    </div>
+    <p style="color: #475569; font-size: 14px; line-height: 1.5; margin-bottom: 8px;">
+      Enter this code to complete your verification. It is valid for <strong>5 minutes</strong>.
+    </p>
+    <p style="color: #94a3b8; font-size: 12px; margin-top: 24px;">
+      If you did not request this code, please ignore this email.
+    </p>
+  </div>
+</body>
+</html>
+        `.trim();
+
+        return { text, html };
+      }
+
       case "BOOKING_CONFIRMED": {
         const text = `
 Slotbook — Appointment Confirmed!
@@ -142,7 +189,6 @@ Details:
 • Date & Time: ${p.startAt} - ${p.endAt}
 • Timezone: ${p.guestTimezone || p.hostTimezone || "UTC"}
 • Meeting Purpose: ${p.meetingPurpose || "Not specified"}
-• ${textMeetNote}
 
 Manage your booking (Reschedule or Cancel):
 ${fullManageUrl}
@@ -171,7 +217,6 @@ The Slotbook Team
       <p style="margin: 4px 0;"><strong>Date &amp; Time:</strong> ${p.startAt} &ndash; ${p.endAt}</p>
       <p style="margin: 4px 0;"><strong>Timezone:</strong> ${p.guestTimezone || p.hostTimezone || "UTC"}</p>
       <p style="margin: 4px 0;"><strong>Meeting Purpose:</strong> ${p.meetingPurpose || "General Appointment"}</p>
-      ${meetNote}
     </div>
 
     ${
@@ -200,9 +245,8 @@ Hello,
 Your appointment for "${p.eventName}" has been rescheduled.
 
 • Previous Time: ${p.previousStartAt}
-• New Time: ${p.newStartAt} &ndash; ${p.newEndAt}
+• New Time: ${p.newStartAt} - ${p.newEndAt}
 • Meeting Purpose: ${p.meetingPurpose || "Not specified"}
-• ${textMeetNote}
 
 Manage your booking:
 ${fullManageUrl}
@@ -219,7 +263,6 @@ ${fullManageUrl}
       <p style="margin: 4px 0; color: #94a3b8; text-decoration: line-through;">Previous: ${p.previousStartAt}</p>
       <p style="margin: 4px 0; color: #047857; font-weight: bold;">New Time: ${p.newStartAt} &ndash; ${p.newEndAt}</p>
       <p style="margin: 4px 0;">Purpose: ${p.meetingPurpose || "General Appointment"}</p>
-      ${meetNote}
     </div>
     ${fullManageUrl ? `<a href="${fullManageUrl}" style="display: inline-block; background: #4f46e5; color: #fff; padding: 10px 20px; border-radius: 6px; text-decoration: none;">View Details</a>` : ""}
   </div>
@@ -230,9 +273,11 @@ ${fullManageUrl}
         return { text, html };
       }
 
-      case "BOOKING_CANCELLED": {
+      case "BOOKING_CANCELLED":
+      case "HOST_CANCELLED_BOOKING": {
+        const title = eventType === "HOST_CANCELLED_BOOKING" ? "Appointment Cancelled by Host" : "Appointment Cancelled";
         const text = `
-Slotbook — Appointment Cancelled
+Slotbook — ${title}
 
 The appointment for "${p.eventName}" on ${p.startAt} has been cancelled.
 Reason: ${p.cancellationReason || "No reason specified"}
@@ -245,7 +290,7 @@ If you need to book another time, please visit the host's booking page.
 <html>
 <body style="font-family: sans-serif; background: #f8fafc; padding: 24px; color: #1e293b;">
   <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; padding: 32px;">
-    <h3 style="color: #dc2626; margin-top: 0;">Appointment Cancelled</h3>
+    <h3 style="color: #dc2626; margin-top: 0;">${title}</h3>
     <p>The appointment for <strong>${p.eventName}</strong> originally scheduled for ${p.startAt} has been cancelled.</p>
     <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 14px; margin: 16px 0; font-size: 14px; color: #991b1b;">
       <strong>Reason:</strong> ${p.cancellationReason || "Cancelled"}
@@ -258,6 +303,7 @@ If you need to book another time, please visit the host's booking page.
         return { text, html };
       }
 
+      case "EVENT_CANCELLED":
       case "HOST_CANCELLED_EVENT": {
         const text = `
 Slotbook — Event Cancellation Notice
@@ -290,8 +336,8 @@ Welcome to Slotbook!
 
 Hello ${p.hostName},
 Your host account (${p.hostEmail}) has been successfully created.
-Visit your dashboard to view events and set your availability:
-${appUrl}/dashboard
+Visit your dashboard to set your availability and create events:
+${appUrl}/host/dashboard
         `.trim();
 
         const html = `
@@ -303,7 +349,7 @@ ${appUrl}/dashboard
     <p>Hello <strong>${p.hostName}</strong>,</p>
     <p>Your host account has been created. You can now configure your schedule, customize your appointment types, and share your personal booking link.</p>
     <div style="margin-top: 24px;">
-      <a href="${appUrl}/dashboard" style="background: #4f46e5; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">Open Host Dashboard</a>
+      <a href="${appUrl}/host/dashboard" style="background: #4f46e5; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">Open Host Dashboard</a>
     </div>
   </div>
 </body>
@@ -344,4 +390,3 @@ Your Slotbook account has been permanently deleted as requested. All upcoming ap
     }
   }
 }
-

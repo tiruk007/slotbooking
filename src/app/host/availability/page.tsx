@@ -51,8 +51,8 @@ export default function HostAvailabilityPage() {
       const res = await fetch("/api/dashboard/availability");
       if (res.ok) {
         const d = await res.json();
-        setWeeklyRules(d.data.weeklyRules || []);
-        setDateOverrides(d.data.dateOverrides || []);
+        setWeeklyRules(d?.data?.weeklyRules || d?.weeklyRules || []);
+        setDateOverrides(d?.data?.dateOverrides || d?.dateOverrides || []);
       }
     } catch (err) {
       console.error("Failed to load availability:", err);
@@ -439,3 +439,4 @@ export default function HostAvailabilityPage() {
     </div>
   );
 }
+

@@ -40,11 +40,12 @@ export default function HostEventsPage() {
 
       if (eventsRes.ok) {
         const d = await eventsRes.json();
-        setEvents(d.data.eventTypes || []);
+        setEvents(d?.data?.eventTypes || d?.eventTypes || []);
       }
       if (meRes.ok) {
         const d = await meRes.json();
-        setHost(d.data.host);
+        const hostData = d?.data?.host || d?.host;
+        if (hostData) setHost(hostData);
       }
     } catch (err) {
       console.error("Failed to load events:", err);
@@ -301,3 +302,4 @@ export default function HostEventsPage() {
     </div>
   );
 }
+

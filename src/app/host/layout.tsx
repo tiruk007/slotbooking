@@ -46,7 +46,12 @@ export default function HostPortalLayout({
         const res = await fetch("/api/auth/me");
         if (res.ok) {
           const data = await res.json();
-          setHost(data.data.host);
+          const hostSession = data?.data?.host || data?.host;
+          if (hostSession) {
+            setHost(hostSession);
+          } else if (!isAuthRoute) {
+            router.push(`/host/login?returnUrl=${encodeURIComponent(pathname)}`);
+          }
         } else if (!isAuthRoute) {
           router.push(`/host/login?returnUrl=${encodeURIComponent(pathname)}`);
         }
@@ -103,7 +108,6 @@ export default function HostPortalLayout({
     { label: "Availability", href: "/host/availability", icon: Clock },
     { label: "Bookings", href: "/host/bookings", icon: BookOpen },
     { label: "Settings", href: "/host/settings", icon: Settings },
-    { label: "Integrations", href: "/host/settings/integrations", icon: Link2 },
   ];
 
   return (
@@ -217,3 +221,4 @@ export default function HostPortalLayout({
     </div>
   );
 }
+

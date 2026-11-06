@@ -7,7 +7,7 @@ import {
   ArrowRight,
   Sparkles,
   Users,
-  Video,
+  Mail,
   Globe,
 } from "lucide-react";
 
@@ -27,7 +27,7 @@ export default function BecomeAHostPage() {
         </h1>
 
         <p className="text-base sm:text-lg text-slate-600 leading-relaxed font-normal">
-          Slotbook gives you total control over your availability. Set recurring windows, buffer times, minimum notice, and connect Google Meet for automated video links.
+          Slotbook gives you total control over your availability. Set recurring windows, buffer times, minimum notice, and automated email confirmations.
         </p>
 
         <div className="pt-2">
@@ -69,12 +69,12 @@ export default function BecomeAHostPage() {
         </div>
 
         <div className="bg-white p-6 sm:p-8 rounded-3xl border border-slate-200 shadow-xs space-y-4">
-          <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
-            <Video className="w-6 h-6" />
+          <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
+            <Mail className="w-6 h-6" />
           </div>
-          <h3 className="text-lg font-bold text-slate-900">Google Meet Integration</h3>
+          <h3 className="text-lg font-bold text-slate-900">Instant Email Notifications</h3>
           <p className="text-xs text-slate-500 leading-relaxed">
-            Connect your own Google Calendar account. Confirmed appointments automatically generate live Google Meet links included in client confirmations.
+            Transactional notification bridge powered by Gmail SMTP. Both you and your clients receive verified email confirmations, OTP security, and self-service private reschedule links.
           </p>
         </div>
       </div>
@@ -133,3 +133,4 @@ export default function BecomeAHostPage() {
     </div>
   );
 }
+

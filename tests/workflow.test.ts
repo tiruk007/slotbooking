@@ -307,57 +307,32 @@ describe("Slotbook Workflow & Data Isolation Suite", () => {
   });
 
   // 14. Google OAuth state validation
-  it("Requirement 14: Google OAuth state requires valid host ID and nonce structure", () => {
-    const hostId = "11111111-2222-3333-4444-555555555555";
-    const nonce = "a1b2c3d4e5f6";
-    const state = `${hostId}:${nonce}`;
-
-    const parts = state.split(":");
-    expect(parts.length).toBe(2);
-    expect(parts[0]).toBe(hostId);
-    expect(parts[1]).toBe(nonce);
+  // 14. Google columns are completely removed from hosts schema
+  it("Requirement 14: Google OAuth columns are removed from hosts table", async () => {
+    const pool = getPool(testDbUrl);
+    const colRes = await pool.query(`
+      SELECT column_name FROM information_schema.columns 
+      WHERE table_name = 'hosts' AND column_name IN ('google_refresh_token', 'google_access_token')
+    `);
+    expect(colRes.rows.length).toBe(0);
   });
 
-  // 15. Google Calendar connection status is accurate per host
-  it("Requirement 15: Google Calendar status is only true when host has active token", async () => {
-    const pool = getPool(testDbUrl);
-    const h = await pool.query(
-      `INSERT INTO hosts (name, email, slug, home_timezone, status, google_refresh_token, google_email)
-       VALUES ('Google Host', 'ghost@example.com', 'ghost', 'UTC', 'ACTIVE', 'valid-refresh-token', 'ghost@gmail.com')
-       RETURNING google_refresh_token, google_email`
-    );
-
-    expect(Boolean(h.rows[0].google_refresh_token)).toBe(true);
-    expect(h.rows[0].google_email).toBe("ghost@gmail.com");
-
-    // Unconnected host
-    const h2 = await pool.query(
-      `INSERT INTO hosts (name, email, slug, home_timezone, status)
-       VALUES ('Non-Google Host', 'nonghost@example.com', 'nonghost', 'UTC', 'ACTIVE')
-       RETURNING google_refresh_token`
-    );
-    expect(Boolean(h2.rows[0].google_refresh_token)).toBe(false);
+  // 15. MeetService returns null without fabricating fake URLs
+  it("Requirement 15: MeetService returns null without fabricating URLs", async () => {
+    const res = await MeetService.createMeetLink();
+    expect(res.meetLink).toBeNull();
+    const resHost = await MeetService.createMeetLinkForHost({});
+    expect(resHost.meetLink).toBeNull();
   });
 
-  // 16. Google Meet creation returns null gracefully when host is not connected
-  it("Requirement 16: Google Meet service returns null without fabricating fake URLs", async () => {
+  // 16. Booking operates with confirmed date/time without Google Calendar event ID
+  it("Requirement 16: Bookings operates without external Google Calendar dependency", async () => {
     const pool = getPool(testDbUrl);
-    const h = await pool.query(
-      `INSERT INTO hosts (name, email, slug, home_timezone, status)
-       VALUES ('No Meet Host', 'nomeet@example.com', 'nomeet', 'UTC', 'ACTIVE') RETURNING id`
-    );
-
-    const result = await MeetService.createMeetLinkForHost({
-      hostId: h.rows[0].id,
-      title: "Test Meeting",
-      startAt: new Date().toISOString(),
-      endAt: new Date(Date.now() + 1800000).toISOString(),
-      hostEmail: "nomeet@example.com",
-      guestEmail: "guest@example.com",
-    });
-
-    expect(result.meetLink).toBeNull();
-    expect(result.configured).toBe(false);
+    const colRes = await pool.query(`
+      SELECT column_name FROM information_schema.columns 
+      WHERE table_name = 'bookings' AND column_name = 'google_calendar_event_id'
+    `);
+    expect(colRes.rows.length).toBe(0);
   });
 
   // 17. Minimum notice is enforced

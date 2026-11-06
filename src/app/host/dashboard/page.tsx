@@ -32,15 +32,16 @@ export default function HostDashboardPage() {
 
         if (meRes.ok) {
           const d = await meRes.json();
-          setHost(d.data.host);
+          const hostData = d?.data?.host || d?.host;
+          if (hostData) setHost(hostData);
         }
         if (eventsRes.ok) {
           const d = await eventsRes.json();
-          setEvents(d.data.eventTypes || []);
+          setEvents(d?.data?.eventTypes || d?.eventTypes || []);
         }
         if (bookingsRes.ok) {
           const d = await bookingsRes.json();
-          setBookings(d.data.bookings || []);
+          setBookings(d?.data?.bookings || d?.bookings || []);
         }
       } catch (err) {
         console.error("Failed to load dashboard data:", err);
@@ -204,19 +205,9 @@ export default function HostDashboardPage() {
                       {new Date(b.startAt).toLocaleDateString()} at {new Date(b.startAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </div>
                   </div>
-                  {b.meetLink ? (
-                    <a
-                      href={b.meetLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-[11px] font-bold text-indigo-600 hover:underline flex items-center gap-1"
-                    >
-                      <span>Join Meet</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  ) : (
-                    <span className="text-[10px] text-slate-400">In-Person/Custom</span>
-                  )}
+                  <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[10px] font-bold">
+                    Confirmed
+                  </span>
                 </div>
               ))}
             </div>
@@ -226,3 +217,4 @@ export default function HostDashboardPage() {
     </div>
   );
 }
+

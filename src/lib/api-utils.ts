@@ -3,7 +3,11 @@ import { ZodError } from "zod";
 import { AppError } from "./booking-service";
 
 export function apiSuccess(data: any, status: number = 200, headers: Record<string, string> = {}) {
-  return NextResponse.json(data, { status, headers });
+  const payload =
+    data !== null && typeof data === "object"
+      ? { ...data, data: data.data !== undefined ? data.data : data }
+      : { data };
+  return NextResponse.json(payload, { status, headers });
 }
 
 export function apiError(error: any) {

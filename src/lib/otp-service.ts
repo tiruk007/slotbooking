@@ -97,12 +97,37 @@ This code will expire in 5 minutes. If you did not request this code, you can sa
 </html>
     `.trim();
 
-    await EmailService.sendEmail({
+    const eventType =
+      purpose === "HOST_REGISTER"
+        ? "HOST_SIGNUP_OTP"
+        : purpose === "HOST_LOGIN"
+        ? "HOST_LOGIN_OTP"
+        : "GUEST_EMAIL_VERIFICATION_OTP";
+
+    const emailRes = await EmailService.sendEmail({
       to: normalizedEmail,
       subject,
       text,
       html,
     });
+
+    try {
+      await pool.query(
+        `INSERT INTO notification_outbox 
+         (event_type, recipient_email, subject, payload, delivery_status, attempt_count, delivered_at)
+         VALUES ($1, $2, $3, $4, $5, 1, $6)`,
+        [
+          eventType,
+          normalizedEmail,
+          subject,
+          JSON.stringify({ email: normalizedEmail, purpose, code }),
+          emailRes.delivered ? "DELIVERED" : "FAILED",
+          emailRes.delivered ? new Date() : null,
+        ]
+      );
+    } catch {
+      // safe fallback
+    }
 
     return {
       message: "Verification code sent to your email",

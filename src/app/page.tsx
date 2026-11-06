@@ -238,7 +238,7 @@ export default async function HomePage() {
             </div>
             <h3 className="text-lg font-bold text-slate-900">3. Confirmed &amp; Connected</h3>
             <p className="text-xs text-slate-500 leading-relaxed">
-              Instantly receive confirmation with calendar details, Google Meet link, and a private magic link to manage plans.
+              Instantly receive verified email confirmation with appointment details and a private magic link to manage plans.
             </p>
           </div>
         </div>
@@ -273,7 +273,7 @@ export default async function HomePage() {
               <li className="flex items-start space-x-3 text-sm text-slate-700">
                 <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
                 <div>
-                  <strong>Google Meet Integration:</strong> Connect Google Calendar to auto-generate conferencing links without manual entry.
+                  <strong>Instant Notification Bridge:</strong> Real-time email delivery with verified domain event notifications for hosts and guests.
                 </div>
               </li>
               <li className="flex items-start space-x-3 text-sm text-slate-700">

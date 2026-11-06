@@ -458,25 +458,8 @@ export class BookingService {
       const rawToken = crypto.randomBytes(32).toString("hex");
       const tokenHash = hashManageToken(rawToken);
 
-      // 6. Attempt Google Meet link generation if configured for this specific host
-      let meetLink: string | null = null;
-      let calendarEventId: string | null = null;
-      try {
-        const meetRes = await MeetService.createMeetLinkForHost({
-          hostId: booking.host_id,
-          title: `${booking.event_name} — ${effectiveGuestName} & ${booking.host_name}`,
-          startAt: booking.start_at.toISOString(),
-          endAt: booking.end_at.toISOString(),
-          hostEmail: booking.host_email,
-          guestEmail: effectiveGuestEmail,
-          meetingPurpose: effectivePurpose,
-        });
-        meetLink = meetRes.meetLink;
-        calendarEventId = meetRes.eventId || null;
-      } catch {
-        meetLink = null;
-        calendarEventId = null;
-      }
+      // 6. Google Meet integration has been removed — bookings operate purely on confirmed date, time, and attendees
+      const meetLink: string | null = null;
 
       // 7. Update booking to CONFIRMED and clear hold expiry
       let updatedBooking: any;
@@ -489,18 +472,15 @@ export class BookingService {
                status = 'CONFIRMED',
                hold_expires_at = NULL,
                manage_token_hash = $4,
-               meet_link = $5,
-               google_calendar_event_id = $6,
+               meet_link = NULL,
                updated_at = clock_timestamp()
-           WHERE id = $7
+           WHERE id = $5
            RETURNING *`,
           [
             effectiveGuestName,
             effectiveGuestEmail,
             effectivePurpose,
             tokenHash,
-            meetLink,
-            calendarEventId,
             holdId,
           ]
         );
@@ -517,6 +497,10 @@ export class BookingService {
       }
 
       // 8. Record notification into transactional outbox for GUEST and HOST
+      const baseUrl = process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+      const cleanBaseUrl = baseUrl.replace(/\/$/, "");
+      const manageUrl = `${cleanBaseUrl}/booking/${rawToken}`;
+
       const outboxPayload = {
         bookingId: holdId,
         eventName: booking.event_name,
@@ -528,13 +512,14 @@ export class BookingService {
         startAt: updatedBooking.start_at.toISOString(),
         endAt: updatedBooking.end_at.toISOString(),
         hostTimezone: booking.home_timezone,
-        manageUrl: `/booking/${rawToken}`,
-        meetLink,
+        manageUrl,
+        meetLink: null,
       };
 
       // Guest confirmation email
       await NotificationService.enqueue(client, {
         bookingId: holdId,
+        relatedHostId: booking.host_id,
         eventType: "BOOKING_CONFIRMED",
         recipientEmail: effectiveGuestEmail,
         subject: `Confirmed: ${booking.event_name} with ${booking.host_name}`,
@@ -544,6 +529,7 @@ export class BookingService {
       // Host booking notification email
       await NotificationService.enqueue(client, {
         bookingId: holdId,
+        relatedHostId: booking.host_id,
         eventType: "BOOKING_CONFIRMED",
         recipientEmail: booking.host_email,
         subject: `New Booking: ${effectiveGuestName} — ${booking.event_name}`,
@@ -559,7 +545,8 @@ export class BookingService {
         guestEmail: updatedBooking.guest_email,
         meetingPurpose: updatedBooking.meeting_purpose,
         manageToken: rawToken,
-        manageUrl: `/booking/${rawToken}`,
+        rawToken: rawToken,
+        manageUrl,
         meetLink: updatedBooking.meet_link,
       };
     });
@@ -726,6 +713,10 @@ export class BookingService {
       );
       const updated = updateRes.rows[0];
 
+      const baseUrl = process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+      const cleanBaseUrl = baseUrl.replace(/\/$/, "");
+      const manageUrl = `${cleanBaseUrl}/booking/${rawToken}`;
+
       // 9. Write notifications for GUEST and HOST
       const reschedulePayload = {
         bookingId: booking.id,
@@ -738,12 +729,13 @@ export class BookingService {
         previousStartAt: booking.start_at.toISOString(),
         newStartAt: updated.start_at.toISOString(),
         newEndAt: updated.end_at.toISOString(),
-        manageUrl: `/bookings/${rawToken}`,
-        meetLink: booking.meet_link,
+        manageUrl,
+        meetLink: null,
       };
 
       await NotificationService.enqueue(client, {
         bookingId: booking.id,
+        relatedHostId: booking.host_id,
         eventType: "BOOKING_RESCHEDULED",
         recipientEmail: booking.guest_email,
         subject: `Rescheduled: ${booking.event_name} with ${booking.host_name}`,
@@ -752,6 +744,7 @@ export class BookingService {
 
       await NotificationService.enqueue(client, {
         bookingId: booking.id,
+        relatedHostId: booking.host_id,
         eventType: "BOOKING_RESCHEDULED",
         recipientEmail: booking.host_email,
         subject: `Rescheduled: ${booking.guest_name} — ${booking.event_name}`,
@@ -850,6 +843,7 @@ export class BookingService {
       if (booking.guest_email) {
         await NotificationService.enqueue(client, {
           bookingId: booking.id,
+          relatedHostId: booking.host_id,
           eventType: "BOOKING_CANCELLED",
           recipientEmail: booking.guest_email,
           subject: `Cancelled: ${booking.event_name} with ${booking.host_name}`,
@@ -859,6 +853,7 @@ export class BookingService {
 
       await NotificationService.enqueue(client, {
         bookingId: booking.id,
+        relatedHostId: booking.host_id,
         eventType: "BOOKING_CANCELLED",
         recipientEmail: booking.host_email,
         subject: `Cancelled by Guest: ${booking.guest_name || "Guest"} — ${booking.event_name}`,
@@ -940,12 +935,22 @@ export class BookingService {
       if (booking.guest_email) {
         await NotificationService.enqueue(client, {
           bookingId: booking.id,
-          eventType: "BOOKING_CANCELLED",
+          relatedHostId: hostId,
+          eventType: "HOST_CANCELLED_BOOKING",
           recipientEmail: booking.guest_email,
           subject: `Appointment Cancelled: ${booking.event_name}`,
           payload: cancelPayload,
         });
       }
+
+      await NotificationService.enqueue(client, {
+        bookingId: booking.id,
+        relatedHostId: hostId,
+        eventType: "HOST_CANCELLED_BOOKING",
+        recipientEmail: booking.host_email,
+        subject: `You Cancelled: ${booking.guest_name || "Guest"} — ${booking.event_name}`,
+        payload: cancelPayload,
+      });
 
       return {
         id: updated.id,

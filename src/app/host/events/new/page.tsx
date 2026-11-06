@@ -288,3 +288,4 @@ export default function NewEventPage() {
     </div>
   );
 }
+

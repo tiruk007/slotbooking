@@ -33,7 +33,7 @@ export default function HostBookingsPage() {
       const res = await fetch(url);
       if (res.ok) {
         const d = await res.json();
-        setBookings(d.data.bookings || []);
+        setBookings(d?.data?.bookings || d?.bookings || []);
       }
     } catch (err) {
       console.error("Failed to load bookings:", err);
@@ -165,18 +165,6 @@ export default function HostBookingsPage() {
               </div>
 
               <div className="flex items-center gap-2 self-start sm:self-center">
-                {b.meetLink && (
-                  <a
-                    href={b.meetLink}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-semibold flex items-center gap-1 transition"
-                  >
-                    <span>Join Meet</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                )}
-
                 {b.status === "CONFIRMED" && (
                   <button
                     onClick={() => {
@@ -243,3 +231,4 @@ export default function HostBookingsPage() {
     </div>
   );
 }
+
