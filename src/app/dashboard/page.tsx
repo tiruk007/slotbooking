@@ -1003,6 +1003,32 @@ export default function DashboardPage() {
             </div>
           </div>
 
+          {/* Integrations Card */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 space-y-6 shadow-xs">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">Video Conferencing &amp; Integrations</h2>
+              <p className="text-xs text-slate-500">Connect Google Calendar to automatically generate Google Meet video links for confirmed appointments</p>
+            </div>
+
+            <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center font-bold text-blue-600 shadow-xs text-base">
+                  G
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-slate-900">Google Meet &amp; Calendar</div>
+                  <div className="text-xs text-slate-500">Generate real Google Meet video links for all confirmed appointments</div>
+                </div>
+              </div>
+              <a
+                href="/api/auth/google"
+                className="inline-flex items-center justify-center px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs"
+              >
+                Connect Google Account
+              </a>
+            </div>
+          </div>
+
           {/* Danger Zone: Account Deletion */}
           <div className="bg-white rounded-2xl border border-red-200 p-6 sm:p-8 space-y-6 shadow-xs">
             <div className="flex items-start gap-3">

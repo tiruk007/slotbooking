@@ -65,3 +65,4 @@ ALTER TABLE notification_outbox ADD CONSTRAINT chk_notification_event_types CHEC
     'HOST_ACCOUNT_DELETED'
   )
 );
+
