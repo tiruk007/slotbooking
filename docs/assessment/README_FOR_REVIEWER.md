@@ -17,34 +17,24 @@ All assessment deliverables have been generated and structured into the folders 
 ```text
 docs/assessment/
 ├── README_FOR_REVIEWER.md                      <-- You are here
-├── SPEAKER_SCRIPT.md                           (5-minute teleprompter narration & speaker script)
-├── SPEAKER_SCRIPT.pdf                          (Compiled 3-page printable speaker script PDF)
 ├── Architecture/
 │   ├── Slotbook_Architecture_and_Reliability_Report.pdf  (9-page comprehensive architecture report)
 │   └── architecture_report.typ                           (Typst source)
-├── Setup_Guide/
-│   ├── FRESH_PC_SETUP_GUIDE.md                 (Zero-prerequisite Windows guide)
-│   ├── Slotbook_Fresh_PC_Setup_Guide.pdf       (Compiled PDF guide)
-│   └── setup_guide.typ                         (Typst source)
-└── Presentation/ (Kept locally for submission upload; ignored on git)
-    ├── Slotbook_Assessment_Presentation.pptx   (8 slides with presenter notes)
-    └── Slotbook_Assessment_Presentation.pdf    (8 widescreen slides)
+└── Setup_Guide/
+    ├── FRESH_PC_SETUP_GUIDE.md                 (Zero-prerequisite Windows guide)
+    ├── Slotbook_Fresh_PC_Setup_Guide.pdf       (Compiled PDF guide)
+    └── setup_guide.typ                         (Typst source)
 ```
 
 ---
 
 ## 1. Quick Navigation to Deliverables
 
-1. **5-Minute Video Speaker & Teleprompter Script**:
-   - [Speaker Script (Markdown)](./SPEAKER_SCRIPT.md) — Word-for-word 5-minute teleprompter narration matching all 5 assessment beats.
-   - [Speaker Script (PDF)](./SPEAKER_SCRIPT.pdf) — Formatted 3-page printable PDF version.
-2. **Deep-Dive System Architecture & Reliability Report (9 Pages)**:
-   - [Architecture Report (PDF)](./Architecture/Slotbook_Architecture_and_Reliability_Report.pdf) — Exhaustive 9-page technical document covering PostgreSQL GiST concurrency, availability formulation, timezone mathematics, transactional outbox pattern, state machines, and test evidence.
-3. **Fresh-PC Windows Setup & Verification Guide**:
+1. **Deep-Dive System Architecture & Reliability Report (9 Pages)**:
+   - [Architecture Report (PDF)](./Architecture/Slotbook_Architecture_and_Reliability_Report.pdf) — Exhaustive 9-page technical document covering PostgreSQL GiST concurrency, availability formulation, timezone mathematics, transactional outbox pattern, state machines, and empirical test evidence.
+2. **Fresh-PC Windows Setup & Verification Guide**:
    - [Fresh-PC Setup Guide (Markdown)](./Setup_Guide/FRESH_PC_SETUP_GUIDE.md) — Step-by-step setup walkthrough for a brand-new Windows 10/11 laptop with zero prerequisites.
    - [Fresh-PC Setup Guide (PDF)](./Setup_Guide/Slotbook_Fresh_PC_Setup_Guide.pdf) — Formatted PDF version.
-4. **Presentation Deck (Local File Upload Deliverable)**:
-   - Located locally in `docs/assessment/Presentation/` (`Slotbook_Assessment_Presentation.pptx` and `.pdf`) for direct upload to the assessment portal.
 
 ---
 
