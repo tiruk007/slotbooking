@@ -415,19 +415,26 @@ export default function PublicBookingPage() {
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
-            <Globe className="w-4 h-4 text-slate-400" />
-            <select
-              value={guestTz}
-              onChange={(e) => setGuestTz(e.target.value)}
-              className="text-xs font-medium border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              {COMMON_TIMEZONES.map((tz) => (
-                <option key={tz} value={tz}>
-                  {tz}
-                </option>
-              ))}
-            </select>
+          <div className="flex flex-col items-end gap-1">
+            <div className="flex items-center space-x-2">
+              <Globe className="w-4 h-4 text-slate-400" />
+              <select
+                value={guestTz}
+                onChange={(e) => setGuestTz(e.target.value)}
+                className="text-xs font-medium border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                {COMMON_TIMEZONES.map((tz) => (
+                  <option key={tz} value={tz}>
+                    {tz}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {hostData?.timezone && hostData.timezone !== guestTz && (
+              <span className="text-[11px] text-slate-500 font-medium">
+                Host working hours based on {hostData.timezone}
+              </span>
+            )}
           </div>
         </div>
 

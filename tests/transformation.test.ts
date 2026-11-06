@@ -53,8 +53,8 @@ describe("Slotbook Product Transformation & Reliability Suite", () => {
 
     // 2. Seed 30 Min Appointment (duration 30m, buffer_before 10m, buffer_after 15m)
     const e1 = await pool.query(
-      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after)
-       VALUES ($1, '30 Min Appointment', '30-min-appointment', 30, 1, 10, 15)
+      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after, booking_horizon_days)
+       VALUES ($1, '30 Min Appointment', '30-min-appointment', 30, 1, 10, 15, 1000)
        RETURNING id`,
       [hostId]
     );
@@ -62,8 +62,8 @@ describe("Slotbook Product Transformation & Reliability Suite", () => {
 
     // 3. Seed 1 Hr Appointment (duration 60m, buffer_before 15m, buffer_after 15m)
     const e2 = await pool.query(
-      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after)
-       VALUES ($1, '1 Hr Appointment', '1-hr-appointment', 60, 1, 15, 15)
+      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after, booking_horizon_days)
+       VALUES ($1, '1 Hr Appointment', '1-hr-appointment', 60, 1, 15, 15, 1000)
        RETURNING id`,
       [hostId]
     );
@@ -71,8 +71,8 @@ describe("Slotbook Product Transformation & Reliability Suite", () => {
 
     // 4. Seed Group Discussion (duration 45m, capacity 4, buffer_before 10m, buffer_after 10m)
     const e3 = await pool.query(
-      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after)
-       VALUES ($1, 'Group Discussion', 'group-discussion', 45, 4, 10, 10)
+      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after, booking_horizon_days)
+       VALUES ($1, 'Group Discussion', 'group-discussion', 45, 4, 10, 10, 1000)
        RETURNING id`,
       [hostId]
     );

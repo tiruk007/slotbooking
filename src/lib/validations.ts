@@ -43,6 +43,16 @@ export const eventTypeSchema = z.object({
   bookingHorizonDays: z.number().int().min(1).max(365).default(30),
 });
 
+export const timeWindowSchema = z.object({
+  start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/, "Invalid start time format (HH:mm)"),
+  end: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/, "Invalid end time format (HH:mm)"),
+});
+
+export const weeklyDayRuleSchema = z.object({
+  weekday: z.number().int().min(1).max(7),
+  windows: z.array(timeWindowSchema),
+});
+
 export const availabilityRuleSchema = z.object({
   weekday: z.number().int().min(1).max(7),
   startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/, "Invalid start time format (HH:mm)"),
@@ -54,6 +64,18 @@ export const dateOverrideSchema = z.object({
   isAvailable: z.boolean(),
   customStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/).optional().nullable(),
   customEndTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/).optional().nullable(),
+});
+
+export const updateAvailabilityInputSchema = z.object({
+  timezone: z.string().optional(),
+  homeTimezone: z.string().optional(),
+  weeklyRules: z.union([z.array(weeklyDayRuleSchema), z.array(availabilityRuleSchema)]).optional(),
+  rules: z.array(availabilityRuleSchema).optional(),
+  dateOverrides: z.array(dateOverrideSchema).optional(),
+  overrides: z.array(dateOverrideSchema).optional(),
+  confirmConflicts: z.boolean().optional(),
+  confirmCancellation: z.boolean().optional(),
+  cancellationReason: z.string().optional(),
 });
 
 export const hostRegisterSchema = z.object({

@@ -20,8 +20,17 @@ export type DomainEventType =
 
 export interface OutboxPayload {
   bookingId?: string;
+  bookingReference?: string;
   eventTypeId?: string;
   eventName?: string;
+  eventDescription?: string;
+  durationMinutes?: number;
+  capacity?: number;
+  bufferBefore?: number;
+  bufferAfter?: number;
+  minimumNoticeMinutes?: number;
+  bookingHorizonDays?: number;
+  publicUrl?: string;
   hostName?: string;
   hostEmail?: string;
   guestName?: string;
@@ -35,9 +44,70 @@ export interface OutboxPayload {
   newStartAt?: string;
   newEndAt?: string;
   cancellationReason?: string;
+  cancelledBy?: string;
+  status?: string;
   manageUrl?: string;
   code?: string;
+  recipientRole?: "GUEST" | "HOST";
+  affectedBookingsCount?: number;
+  guestsNotifiedCount?: number;
+  deletedAt?: string;
+  updatedAt?: string;
+  createdAt?: string;
   [key: string]: any;
+}
+
+function emailShell(contentHtml: string, previewText: string = "Slotbook Notification"): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${previewText}</title>
+</head>
+<body style="margin: 0; padding: 24px 12px; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; line-height: 1.5;">
+  <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);">
+    <!-- Header -->
+    <div style="padding: 24px 32px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between;">
+      <div style="font-size: 20px; font-weight: 800; color: #4f46e5; letter-spacing: -0.5px;">
+        Slotbook
+      </div>
+      <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; background: #f1f5f9; padding: 4px 10px; border-radius: 6px;">
+        Scheduling
+      </div>
+    </div>
+
+    <!-- Main Content -->
+    <div style="padding: 32px;">
+      ${contentHtml}
+    </div>
+
+    <!-- Footer -->
+    <div style="padding: 20px 32px; background: #f8fafc; border-top: 1px solid #f1f5f9; text-align: center; font-size: 12px; color: #94a3b8;">
+      <p style="margin: 0 0 4px 0; font-weight: 600; color: #64748b;">Slotbook &bull; Simple scheduling. Seamless meetings.</p>
+      <p style="margin: 0;">This is an automated appointment notification. Please do not reply directly to this email.</p>
+    </div>
+  </div>
+</body>
+</html>`.trim();
+}
+
+function formatDisplayDate(iso: string | undefined, tz: string = "UTC"): string {
+  if (!iso) return "N/A";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString("en-US", {
+      timeZone: tz,
+      weekday: "short",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
 }
 
 export class NotificationService {
@@ -90,7 +160,7 @@ export class NotificationService {
       const recipient = row.recipient_email || payload.guestEmail || payload.hostEmail;
       const subject = row.subject || `Slotbook Notification: ${row.event_type}`;
 
-      const { text, html } = this.renderEmail(row.event_type as DomainEventType, payload);
+      const { text, html } = this.renderEmail(row.event_type as DomainEventType, payload, recipient);
 
       const result = await EmailService.sendEmail({
         to: recipient,
@@ -124,13 +194,26 @@ export class NotificationService {
   /**
    * Renders professional HTML and plain text templates for each domain event.
    */
-  static renderEmail(eventType: DomainEventType, p: OutboxPayload): { text: string; html: string } {
+  static renderEmail(
+    eventType: DomainEventType,
+    p: OutboxPayload,
+    recipientEmail?: string
+  ): { text: string; html: string } {
     const appUrl = (process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").replace(/\/$/, "");
     const fullManageUrl = p.manageUrl
       ? (p.manageUrl.startsWith("http") ? p.manageUrl : `${appUrl}${p.manageUrl.startsWith("/") ? "" : "/"}${p.manageUrl}`)
       : "";
 
+    // Determine recipient role (Guest vs Host)
+    const isHostRecipient =
+      p.recipientRole === "HOST" ||
+      (recipientEmail && p.hostEmail && recipientEmail.toLowerCase() === p.hostEmail.toLowerCase());
+
+    const displayTz = p.hostTimezone || p.guestTimezone || "UTC";
+    const bookingRef = p.bookingReference || p.bookingId || "N/A";
+
     switch (eventType) {
+      // 1. OTP Verification
       case "HOST_SIGNUP_OTP":
       case "HOST_LOGIN_OTP":
       case "GUEST_EMAIL_VERIFICATION_OTP": {
@@ -138,7 +221,7 @@ export class NotificationService {
           eventType === "HOST_SIGNUP_OTP"
             ? "Host Account Registration"
             : eventType === "HOST_LOGIN_OTP"
-            ? "Host Sign In"
+            ? "Host Portal Sign In"
             : "Verify Your Appointment";
         const code = p.code || "------";
 
@@ -150,241 +233,502 @@ Your 6-digit verification code is: ${code}
 This code will expire in 5 minutes. If you did not request this verification, you can safely ignore this email.
         `.trim();
 
-        const html = `
-<!DOCTYPE html>
-<html>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
-  <div style="max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); text-align: center;">
-    <h2 style="color: #4f46e5; margin: 0 0 8px 0; font-size: 24px;">Slotbook</h2>
-    <p style="color: #64748b; font-size: 14px; margin-top: 0;">${title}</p>
-    <div style="margin: 32px 0;">
-      <div style="font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #1e293b; background: #f1f5f9; padding: 16px 24px; border-radius: 8px; display: inline-block; border: 1px dashed #cbd5e1;">
-        ${code}
-      </div>
-    </div>
-    <p style="color: #475569; font-size: 14px; line-height: 1.5; margin-bottom: 8px;">
-      Enter this code to complete your verification. It is valid for <strong>5 minutes</strong>.
-    </p>
-    <p style="color: #94a3b8; font-size: 12px; margin-top: 24px;">
-      If you did not request this code, please ignore this email.
-    </p>
-  </div>
-</body>
-</html>
-        `.trim();
+        const contentHtml = `
+          <div style="text-align: center;">
+            <h1 style="color: #0f172a; font-size: 22px; font-weight: 800; margin: 0 0 8px 0;">${title}</h1>
+            <p style="color: #64748b; font-size: 14px; margin: 0 0 28px 0;">Enter the one-time code below to verify your email address.</p>
+            
+            <div style="background: #f8fafc; border: 2px dashed #cbd5e1; border-radius: 12px; padding: 20px 32px; display: inline-block; margin-bottom: 24px;">
+              <span style="font-size: 38px; font-weight: 800; letter-spacing: 10px; color: #1e293b; font-family: monospace;">${code}</span>
+            </div>
 
-        return { text, html };
+            <p style="color: #475569; font-size: 13px; line-height: 1.6; margin: 0 0 12px 0;">
+              This code will expire in <strong>5 minutes</strong>.
+            </p>
+            <p style="color: #94a3b8; font-size: 12px; margin: 0;">
+              If you did not request this code, no action is needed and you can safely ignore this message.
+            </p>
+          </div>
+        `;
+
+        return { text, html: emailShell(contentHtml, title) };
       }
 
+      // 2. Booking Confirmed (Unified Template, Recipient-Aware Presentation)
       case "BOOKING_CONFIRMED": {
+        const headline = isHostRecipient ? "You have a new appointment." : "Your appointment is confirmed.";
+        const subheadline = isHostRecipient
+          ? `You have a confirmed booking with <strong>${p.guestName || "Guest"}</strong>.`
+          : `You are scheduled with <strong>${p.hostName || "Host"}</strong>.`;
+
         const text = `
-Slotbook — Appointment Confirmed!
+Slotbook — ${headline}
 
-Hello ${p.guestName || "Guest"},
-Your appointment for "${p.eventName}" with ${p.hostName || "your host"} has been confirmed.
+${subheadline.replace(/<[^>]*>/g, "")}
 
-Details:
+Appointment Details:
+• Booking Reference: ${bookingRef}
 • Event: ${p.eventName}
+• Date & Time: ${formatDisplayDate(p.startAt, displayTz)} - ${formatDisplayDate(p.endAt, displayTz)} (${displayTz})
 • Host: ${p.hostName} (${p.hostEmail || ""})
-• Date & Time: ${p.startAt} - ${p.endAt}
-• Timezone: ${p.guestTimezone || p.hostTimezone || "UTC"}
-• Meeting Purpose: ${p.meetingPurpose || "Not specified"}
+• Guest: ${p.guestName} (${p.guestEmail || ""})
+• Meeting Purpose: ${p.meetingPurpose || "General Appointment"}
+• Status: Confirmed
 
-Manage your booking (Reschedule or Cancel):
-${fullManageUrl}
-
+${
+  !isHostRecipient && fullManageUrl
+    ? `Manage your booking (Reschedule or Cancel):\n${fullManageUrl}\n`
+    : ""
+}
 Thank you,
 The Slotbook Team
         `.trim();
 
-        const html = `
-<!DOCTYPE html>
-<html>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
-  <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-    <div style="text-align: center; margin-bottom: 24px;">
-      <h2 style="color: #4f46e5; margin: 0; font-size: 24px;">Slotbook</h2>
-      <p style="color: #64748b; font-size: 14px; margin-top: 4px;">Simple scheduling. Seamless meetings.</p>
-    </div>
+        const contentHtml = `
+          <div style="margin-bottom: 24px;">
+            <div style="display: inline-block; background: #ecfdf5; border: 1px solid #a7f3d0; color: #047857; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding: 4px 12px; border-radius: 9999px; margin-bottom: 12px;">
+              Confirmed
+            </div>
+            <h1 style="color: #0f172a; font-size: 24px; font-weight: 800; margin: 0 0 6px 0; letter-spacing: -0.5px;">
+              ${headline}
+            </h1>
+            <p style="color: #475569; font-size: 14px; margin: 0;">
+              ${subheadline}
+            </p>
+          </div>
 
-    <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin-bottom: 24px; text-align: center;">
-      <h3 style="color: #166534; margin: 0 0 6px 0; font-size: 18px;">Appointment Confirmed!</h3>
-      <p style="color: #15803d; margin: 0; font-size: 14px;">You're scheduled with <strong>${p.hostName || "Host"}</strong>.</p>
-    </div>
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 24px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600; width: 140px;">Booking Ref:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-family: monospace; font-weight: 700;">${bookingRef}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Event:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-weight: 700;">${p.eventName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Date &amp; Time:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-weight: 700;">
+                  ${formatDisplayDate(p.startAt, displayTz)}
+                </td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Timezone:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${displayTz}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Host:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${p.hostName} (${p.hostEmail || ""})</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Guest:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${p.guestName} (${p.guestEmail || ""})</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Meeting Purpose:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${p.meetingPurpose || "General Appointment"}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Status:</td>
+                <td style="padding: 6px 0; color: #059669; font-weight: 700;">Confirmed</td>
+              </tr>
+            </table>
+          </div>
 
-    <div style="background: #f8fafc; border-radius: 8px; padding: 18px; margin-bottom: 24px; font-size: 14px; line-height: 1.6;">
-      <p style="margin: 4px 0;"><strong>Appointment:</strong> ${p.eventName}</p>
-      <p style="margin: 4px 0;"><strong>Date &amp; Time:</strong> ${p.startAt} &ndash; ${p.endAt}</p>
-      <p style="margin: 4px 0;"><strong>Timezone:</strong> ${p.guestTimezone || p.hostTimezone || "UTC"}</p>
-      <p style="margin: 4px 0;"><strong>Meeting Purpose:</strong> ${p.meetingPurpose || "General Appointment"}</p>
-    </div>
+          ${
+            !isHostRecipient && fullManageUrl
+              ? `
+          <div style="text-align: center; margin-top: 24px;">
+            <a href="${fullManageUrl}" style="background-color: #4f46e5; color: #ffffff; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 14px; display: inline-block;">
+              Manage Appointment
+            </a>
+            <p style="font-size: 12px; color: #94a3b8; margin: 10px 0 0 0;">
+              Need to reschedule or cancel? You can change your appointment at any time using this link.
+            </p>
+          </div>
+          `
+              : isHostRecipient
+              ? `
+          <div style="text-align: center; margin-top: 24px;">
+            <a href="${appUrl}/host/bookings" style="background-color: #0f172a; color: #ffffff; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 14px; display: inline-block;">
+              View in Host Portal
+            </a>
+          </div>
+          `
+              : ""
+          }
+        `;
 
-    ${
-      fullManageUrl
-        ? `
-    <div style="text-align: center; margin-top: 24px;">
-      <a href="${fullManageUrl}" style="background-color: #4f46e5; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 14px; display: inline-block;">Manage Appointment</a>
-      <p style="font-size: 12px; color: #94a3b8; margin-top: 10px;">Need to change plans? You can reschedule or cancel at any time.</p>
-    </div>
-    `
-        : ""
-    }
-  </div>
-</body>
-</html>
-        `.trim();
-
-        return { text, html };
+        return { text, html: emailShell(contentHtml, headline) };
       }
 
+      // 3. Booking Rescheduled
       case "BOOKING_RESCHEDULED": {
+        const headline = "Appointment Rescheduled";
         const text = `
 Slotbook — Appointment Rescheduled
 
 Hello,
-Your appointment for "${p.eventName}" has been rescheduled.
+The appointment for "${p.eventName}" has been rescheduled.
 
-• Previous Time: ${p.previousStartAt}
-• New Time: ${p.newStartAt} - ${p.newEndAt}
-• Meeting Purpose: ${p.meetingPurpose || "Not specified"}
+• Booking Reference: ${bookingRef}
+• Event: ${p.eventName}
+• Previous Time: ${formatDisplayDate(p.previousStartAt, displayTz)}
+• New Time: ${formatDisplayDate(p.newStartAt, displayTz)}
+• Timezone: ${displayTz}
+• Host: ${p.hostName}
+• Guest: ${p.guestName}
+• Purpose: ${p.meetingPurpose || "General Appointment"}
 
-Manage your booking:
-${fullManageUrl}
+${!isHostRecipient && fullManageUrl ? `Manage Appointment:\n${fullManageUrl}\n` : ""}
         `.trim();
 
-        const html = `
-<!DOCTYPE html>
-<html>
-<body style="font-family: sans-serif; background: #f8fafc; padding: 24px; color: #1e293b;">
-  <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; padding: 32px;">
-    <h3 style="color: #4f46e5; margin-top: 0;">Appointment Rescheduled</h3>
-    <p>Your appointment for <strong>${p.eventName}</strong> has been updated.</p>
-    <div style="background: #f8fafc; border-radius: 8px; padding: 16px; margin: 16px 0; font-size: 14px;">
-      <p style="margin: 4px 0; color: #94a3b8; text-decoration: line-through;">Previous: ${p.previousStartAt}</p>
-      <p style="margin: 4px 0; color: #047857; font-weight: bold;">New Time: ${p.newStartAt} &ndash; ${p.newEndAt}</p>
-      <p style="margin: 4px 0;">Purpose: ${p.meetingPurpose || "General Appointment"}</p>
-    </div>
-    ${fullManageUrl ? `<a href="${fullManageUrl}" style="display: inline-block; background: #4f46e5; color: #fff; padding: 10px 20px; border-radius: 6px; text-decoration: none;">View Details</a>` : ""}
-  </div>
-</body>
-</html>
-        `.trim();
+        const contentHtml = `
+          <div style="margin-bottom: 24px;">
+            <h1 style="color: #0f172a; font-size: 22px; font-weight: 800; margin: 0 0 6px 0;">Appointment Rescheduled</h1>
+            <p style="color: #475569; font-size: 14px; margin: 0;">The meeting time has been updated.</p>
+          </div>
 
-        return { text, html };
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 24px; font-size: 13px;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600; width: 140px;">Booking Ref:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-family: monospace;">${bookingRef}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Event:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-weight: 700;">${p.eventName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Previous Time:</td>
+                <td style="padding: 6px 0; color: #94a3b8; text-decoration: line-through;">${formatDisplayDate(p.previousStartAt, displayTz)}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">New Time:</td>
+                <td style="padding: 6px 0; color: #059669; font-weight: 700;">${formatDisplayDate(p.newStartAt, displayTz)}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Timezone:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${displayTz}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Meeting Purpose:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${p.meetingPurpose || "General Appointment"}</td>
+              </tr>
+            </table>
+          </div>
+
+          ${
+            !isHostRecipient && fullManageUrl
+              ? `
+          <div style="text-align: center;">
+            <a href="${fullManageUrl}" style="background-color: #4f46e5; color: #ffffff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 14px; display: inline-block;">
+              View Appointment
+            </a>
+          </div>
+          `
+              : ""
+          }
+        `;
+
+        return { text, html: emailShell(contentHtml, headline) };
       }
 
+      // 4. Cancellation (Unified Template, Recipient-Aware Presentation)
       case "BOOKING_CANCELLED":
-      case "HOST_CANCELLED_BOOKING": {
-        const title = eventType === "HOST_CANCELLED_BOOKING" ? "Appointment Cancelled by Host" : "Appointment Cancelled";
-        const text = `
-Slotbook — ${title}
-
-The appointment for "${p.eventName}" on ${p.startAt} has been cancelled.
-Reason: ${p.cancellationReason || "No reason specified"}
-
-If you need to book another time, please visit the host's booking page.
-        `.trim();
-
-        const html = `
-<!DOCTYPE html>
-<html>
-<body style="font-family: sans-serif; background: #f8fafc; padding: 24px; color: #1e293b;">
-  <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; padding: 32px;">
-    <h3 style="color: #dc2626; margin-top: 0;">${title}</h3>
-    <p>The appointment for <strong>${p.eventName}</strong> originally scheduled for ${p.startAt} has been cancelled.</p>
-    <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 14px; margin: 16px 0; font-size: 14px; color: #991b1b;">
-      <strong>Reason:</strong> ${p.cancellationReason || "Cancelled"}
-    </div>
-  </div>
-</body>
-</html>
-        `.trim();
-
-        return { text, html };
-      }
-
+      case "HOST_CANCELLED_BOOKING":
       case "EVENT_CANCELLED":
       case "HOST_CANCELLED_EVENT": {
+        const headline = isHostRecipient
+          ? `Appointment cancellation — ${p.guestName || "Guest"}`
+          : "Your Slotbook appointment has been cancelled";
+
         const text = `
-Slotbook — Event Cancellation Notice
+Slotbook — ${headline}
 
-Hello,
-The host has cancelled the event "${p.eventName}".
-As a result, your scheduled appointment on ${p.startAt} has been cancelled.
-Reason: ${p.cancellationReason || "Event discontinued by host"}
+The appointment for "${p.eventName}" originally scheduled for ${formatDisplayDate(p.startAt, displayTz)} has been cancelled.
+
+Details:
+• Booking Reference: ${bookingRef}
+• Event: ${p.eventName}
+• Host: ${p.hostName}
+• Guest: ${p.guestName}
+• Original Date & Time: ${formatDisplayDate(p.startAt, displayTz)} (${displayTz})
+• Purpose: ${p.meetingPurpose || "General Appointment"}
+• Cancellation Reason: ${p.cancellationReason || "No reason specified"}
+• Initiated By: ${p.cancelledBy || (isHostRecipient ? "Guest" : "Host")}
+• Status: Cancelled
         `.trim();
 
-        const html = `
-<!DOCTYPE html>
-<html>
-<body style="font-family: sans-serif; background: #f8fafc; padding: 24px;">
-  <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; padding: 32px;">
-    <h3 style="color: #dc2626;">Event Cancelled by Host</h3>
-    <p>The host has cancelled <strong>${p.eventName}</strong>. Your upcoming appointment on ${p.startAt} has been cancelled.</p>
-    <p><strong>Host's note:</strong> ${p.cancellationReason || "Event schedule updated"}</p>
-  </div>
-</body>
-</html>
-        `.trim();
+        const contentHtml = `
+          <div style="margin-bottom: 24px;">
+            <div style="display: inline-block; background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding: 4px 12px; border-radius: 9999px; margin-bottom: 12px;">
+              Cancelled
+            </div>
+            <h1 style="color: #0f172a; font-size: 22px; font-weight: 800; margin: 0 0 6px 0;">
+              ${headline}
+            </h1>
+            <p style="color: #475569; font-size: 14px; margin: 0;">
+              The appointment has been removed from the schedule.
+            </p>
+          </div>
 
-        return { text, html };
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 24px; font-size: 13px;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600; width: 140px;">Booking Ref:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-family: monospace;">${bookingRef}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Event:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-weight: 700;">${p.eventName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Host:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${p.hostName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Guest:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${p.guestName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Original Time:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${formatDisplayDate(p.startAt, displayTz)}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Cancellation Reason:</td>
+                <td style="padding: 6px 0; color: #dc2626; font-weight: 600;">${p.cancellationReason || "Cancelled"}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Initiated By:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${p.cancelledBy || (isHostRecipient ? "Guest" : "Host")}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Status:</td>
+                <td style="padding: 6px 0; color: #dc2626; font-weight: 700;">Cancelled</td>
+              </tr>
+            </table>
+          </div>
+        `;
+
+        return { text, html: emailShell(contentHtml, headline) };
       }
 
+      // 5. Host Event Created Email
+      case "EVENT_CREATED": {
+        const headline = "Your new Slotbook event is ready";
+        const publicUrl = p.publicUrl || `${appUrl}/events`;
+
+        const text = `
+Slotbook — Your new event is ready!
+
+Hello ${p.hostName || "Host"},
+Your new appointment type "${p.eventName}" is published and ready for scheduling.
+
+Event Details:
+• Event Name: ${p.eventName}
+• Description: ${p.eventDescription || "None"}
+• Duration: ${p.durationMinutes} minutes
+• Capacity: ${p.capacity || 1} guest(s) per slot
+• Buffer Before: ${p.bufferBefore || 0} minutes
+• Buffer After: ${p.bufferAfter || 0} minutes
+• Minimum Notice: ${p.minimumNoticeMinutes || 0} minutes
+• Booking Horizon: ${p.bookingHorizonDays || 30} days
+• Public Booking URL: ${publicUrl}
+• Created: ${p.createdAt || new Date().toISOString()}
+
+View Your Event:
+${publicUrl}
+        `.trim();
+
+        const contentHtml = `
+          <div style="margin-bottom: 24px;">
+            <div style="display: inline-block; background: #e0e7ff; color: #4338ca; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding: 4px 12px; border-radius: 9999px; margin-bottom: 12px;">
+              Event Ready
+            </div>
+            <h1 style="color: #0f172a; font-size: 24px; font-weight: 800; margin: 0 0 6px 0;">
+              Your new Slotbook event is ready
+            </h1>
+            <p style="color: #475569; font-size: 14px; margin: 0;">
+              Hello <strong>${p.hostName || "Host"}</strong>, your event type <strong>"${p.eventName}"</strong> is now live.
+            </p>
+          </div>
+
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 24px; font-size: 13px;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600; width: 140px;">Event Name:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-weight: 700;">${p.eventName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Description:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${p.eventDescription || "None"}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Duration:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${p.durationMinutes} minutes</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Capacity:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${p.capacity || 1} guest(s) per slot</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Buffers:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${p.bufferBefore || 0}m before / ${p.bufferAfter || 0}m after</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Minimum Notice:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${p.minimumNoticeMinutes || 0} minutes</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Booking Horizon:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${p.bookingHorizonDays || 30} days</td>
+              </tr>
+            </table>
+          </div>
+
+          <div style="text-align: center; margin-top: 24px;">
+            <a href="${publicUrl}" style="background-color: #4f46e5; color: #ffffff; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 14px; display: inline-block;">
+              View Your Event
+            </a>
+          </div>
+        `;
+
+        return { text, html: emailShell(contentHtml, headline) };
+      }
+
+      // 6. Host Event Deletion Email
+      case "EVENT_DELETED": {
+        const headline = "Your Slotbook event has been deleted";
+        const text = `
+Slotbook — ${headline}
+
+Hello ${p.hostName || "Host"},
+Your event "${p.eventName}" has been permanently deleted.
+
+Deletion Summary:
+• Event Name: ${p.eventName}
+• Deletion Timestamp: ${p.deletedAt || new Date().toISOString()}
+• Reason for Deletion: ${p.reason || "Discontinued by host"}
+• Affected Bookings Cancelled: ${p.affectedBookingsCount || 0}
+• Guests Notified: ${p.guestsNotifiedCount || 0}
+• Final Status: Deleted
+        `.trim();
+
+        const contentHtml = `
+          <div style="margin-bottom: 24px;">
+            <h1 style="color: #0f172a; font-size: 22px; font-weight: 800; margin: 0 0 6px 0;">
+              Your Slotbook event has been deleted
+            </h1>
+            <p style="color: #475569; font-size: 14px; margin: 0;">
+              The event type <strong>"${p.eventName}"</strong> has been removed from your account.
+            </p>
+          </div>
+
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; font-size: 13px;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600; width: 160px;">Event Name:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-weight: 700;">${p.eventName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Deletion Timestamp:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${p.deletedAt || new Date().toISOString()}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Reason:</td>
+                <td style="padding: 6px 0; color: #0f172a;">${p.reason || "Discontinued by host"}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Bookings Cancelled:</td>
+                <td style="padding: 6px 0; color: #dc2626; font-weight: 700;">${p.affectedBookingsCount || 0}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Guests Notified:</td>
+                <td style="padding: 6px 0; color: #059669; font-weight: 700;">${p.guestsNotifiedCount || 0}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Final Status:</td>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 700;">Deleted</td>
+              </tr>
+            </table>
+          </div>
+        `;
+
+        return { text, html: emailShell(contentHtml, headline) };
+      }
+
+      // 7. Event Updated Email
+      case "EVENT_UPDATED": {
+        const headline = "Your Slotbook event has been updated";
+        const text = `
+Slotbook — ${headline}
+
+Hello ${p.hostName || "Host"},
+Your event "${p.eventName}" configuration has been updated.
+Timestamp: ${p.updatedAt || new Date().toISOString()}
+        `.trim();
+
+        const contentHtml = `
+          <div style="margin-bottom: 24px;">
+            <h1 style="color: #0f172a; font-size: 22px; font-weight: 800; margin: 0 0 6px 0;">
+              ${headline}
+            </h1>
+            <p style="color: #475569; font-size: 14px; margin: 0;">
+              Your event <strong>"${p.eventName}"</strong> configuration has been saved.
+            </p>
+          </div>
+        `;
+
+        return { text, html: emailShell(contentHtml, headline) };
+      }
+
+      // 8. Host Registered
       case "HOST_REGISTERED": {
+        const headline = "Welcome to Slotbook";
         const text = `
 Welcome to Slotbook!
 
 Hello ${p.hostName},
-Your host account (${p.hostEmail}) has been successfully created.
-Visit your dashboard to set your availability and create events:
-${appUrl}/host/dashboard
+Your host account has been created.
+Open your dashboard: ${appUrl}/host/dashboard
         `.trim();
 
-        const html = `
-<!DOCTYPE html>
-<html>
-<body style="font-family: sans-serif; background: #f8fafc; padding: 24px;">
-  <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; padding: 32px;">
-    <h2 style="color: #4f46e5;">Welcome to Slotbook!</h2>
-    <p>Hello <strong>${p.hostName}</strong>,</p>
-    <p>Your host account has been created. You can now configure your schedule, customize your appointment types, and share your personal booking link.</p>
-    <div style="margin-top: 24px;">
-      <a href="${appUrl}/host/dashboard" style="background: #4f46e5; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">Open Host Dashboard</a>
-    </div>
-  </div>
-</body>
-</html>
-        `.trim();
+        const contentHtml = `
+          <h1 style="color: #0f172a; font-size: 24px; font-weight: 800; margin: 0 0 8px 0;">Welcome to Slotbook</h1>
+          <p style="color: #475569; font-size: 14px; margin: 0 0 24px 0;">Hello <strong>${p.hostName}</strong>, your host portal is ready.</p>
+          <div style="text-align: center;">
+            <a href="${appUrl}/host/dashboard" style="background-color: #4f46e5; color: #ffffff; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 14px; display: inline-block;">
+              Open Host Dashboard
+            </a>
+          </div>
+        `;
 
-        return { text, html };
+        return { text, html: emailShell(contentHtml, headline) };
       }
 
+      // 9. Host Account Deleted
       case "HOST_ACCOUNT_DELETED": {
+        const headline = "Slotbook Account Deleted";
         const text = `
 Slotbook — Account Deleted
 
 Hello ${p.hostName || "Host"},
-Your Slotbook account has been permanently deleted as requested. All upcoming appointments have been cancelled and affected guests have been notified.
+Your Slotbook host account and associated data have been permanently deleted as requested.
         `.trim();
 
-        const html = `
-<!DOCTYPE html>
-<html>
-<body style="font-family: sans-serif; background: #f8fafc; padding: 24px;">
-  <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; padding: 32px;">
-    <h3 style="color: #334155;">Account Deleted</h3>
-    <p>Your Slotbook host account and associated scheduling data have been successfully deleted.</p>
-  </div>
-</body>
-</html>
-        `.trim();
+        const contentHtml = `
+          <h1 style="color: #0f172a; font-size: 22px; font-weight: 800; margin: 0 0 8px 0;">Account Deleted</h1>
+          <p style="color: #475569; font-size: 14px;">Your Slotbook host account and associated data have been permanently deleted as requested.</p>
+        `;
 
-        return { text, html };
+        return { text, html: emailShell(contentHtml, headline) };
       }
 
       default: {
         const text = `Slotbook Notification: ${eventType}\n${JSON.stringify(p, null, 2)}`;
-        const html = `<p>${text}</p>`;
+        const html = emailShell(`<p style="white-space: pre-wrap;">${text}</p>`, `Slotbook Notification: ${eventType}`);
         return { text, html };
       }
     }

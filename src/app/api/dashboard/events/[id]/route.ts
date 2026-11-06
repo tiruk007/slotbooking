@@ -108,7 +108,31 @@ export async function PUT(
       ]
     );
 
-    return apiSuccess({ eventType: res.rows[0] });
+    const updatedEvent = res.rows[0];
+
+    // Notify host about event configuration update
+    const client = await pool.connect();
+    try {
+      await NotificationService.enqueue(client, {
+        eventType: "EVENT_UPDATED",
+        recipientEmail: session.email,
+        relatedHostId: session.id,
+        subject: "Your Slotbook event has been updated",
+        payload: {
+          eventName: updatedEvent.name,
+          hostName: session.name,
+          hostEmail: session.email,
+          updatedAt: new Date().toISOString(),
+        },
+      });
+      NotificationService.processOutbox().catch((e) =>
+        console.error("Outbox process error:", e.message)
+      );
+    } finally {
+      client.release();
+    }
+
+    return apiSuccess({ eventType: updatedEvent });
   } catch (err) {
     return apiError(err);
   }
@@ -167,8 +191,9 @@ export async function DELETE(
       }, 200);
     }
 
-    // Transactionally cancel affected bookings, notify affected guests, and delete event
+    // Transactionally cancel affected bookings, notify affected guests, delete event, and notify host
     await withTransaction(pool, async (client) => {
+      let notifiedCount = 0;
       for (const booking of futureBookingsRes.rows) {
         await client.query(
           `UPDATE bookings
@@ -182,19 +207,24 @@ export async function DELETE(
         await client.query("DELETE FROM active_reservations WHERE booking_id = $1", [booking.id]);
 
         if (booking.guest_email) {
+          notifiedCount++;
           await NotificationService.enqueue(client, {
             bookingId: booking.id,
-            eventType: "HOST_CANCELLED_EVENT",
+            relatedHostId: session.id,
+            eventType: "EVENT_CANCELLED",
             recipientEmail: booking.guest_email,
-            subject: `Notice: ${event.name} Cancelled`,
+            subject: "Your Slotbook appointment has been cancelled",
             payload: {
               bookingId: booking.id,
+              bookingReference: booking.id,
               eventName: event.name,
               hostName: session.name,
               guestName: booking.guest_name,
               guestEmail: booking.guest_email,
               startAt: booking.start_at.toISOString(),
               cancellationReason: reason,
+              cancelledBy: "Host",
+              status: "CANCELLED",
             },
           });
         }
@@ -204,6 +234,23 @@ export async function DELETE(
         "DELETE FROM event_types WHERE id = $1 AND host_id = $2",
         [params.id, session.id]
       );
+
+      // Dedicated notification to host regarding event deletion
+      await NotificationService.enqueue(client, {
+        eventType: "EVENT_DELETED",
+        recipientEmail: session.email,
+        relatedHostId: session.id,
+        subject: "Your Slotbook event has been deleted",
+        payload: {
+          eventName: event.name,
+          hostName: session.name,
+          deletedAt: new Date().toISOString(),
+          reason,
+          affectedBookingsCount: futureBookingsRes.rows.length,
+          guestsNotifiedCount: notifiedCount,
+          status: "DELETED",
+        },
+      });
     });
 
     NotificationService.processOutbox().catch((e) =>

@@ -80,18 +80,31 @@ export async function POST(request: NextRequest) {
 
     const newEvent = res.rows[0];
 
-    // Notification: send only to host
+    // Notification: dedicated email to host only
     const client = await pool.connect();
     try {
+      const baseUrl = (process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").replace(/\/$/, "");
+      const hostSlugOrId = session.slug || session.id;
+      const publicUrl = `${baseUrl}/book/${hostSlugOrId}/${newEvent.slug}`;
+
       await NotificationService.enqueue(client, {
         eventType: "EVENT_CREATED",
         recipientEmail: session.email,
-        subject: `New Event Created: ${newEvent.name}`,
+        relatedHostId: session.id,
+        subject: "Your new Slotbook event is ready",
         payload: {
           eventName: newEvent.name,
+          eventDescription: newEvent.description || "",
           hostName: session.name,
           hostEmail: session.email,
           durationMinutes: newEvent.durationMinutes,
+          capacity: newEvent.capacity,
+          bufferBefore: newEvent.bufferBefore,
+          bufferAfter: newEvent.bufferAfter,
+          minimumNoticeMinutes: newEvent.minimumNoticeMinutes,
+          bookingHorizonDays: newEvent.bookingHorizonDays,
+          publicUrl,
+          createdAt: new Date().toISOString(),
         },
       });
       NotificationService.processOutbox().catch((e) =>

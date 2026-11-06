@@ -64,6 +64,98 @@ export interface HostCancelBookingParams {
   customUrl?: string;
 }
 
+/**
+ * Validates candidate slot against host minimum notice, booking horizon,
+ * weekly availability, and date overrides.
+ */
+export async function validateSlotAgainstHostConstraints(
+  client: PoolClient,
+  params: {
+    hostId: string;
+    hostTimezone: string;
+    startAt: Date;
+    endAt: Date;
+    bufferBefore: number;
+    bufferAfter: number;
+    minimumNoticeMinutes: number;
+    bookingHorizonDays: number;
+    dbNow: Date;
+  }
+) {
+  const {
+    hostId,
+    hostTimezone,
+    startAt,
+    endAt,
+    bufferBefore,
+    bufferAfter,
+    minimumNoticeMinutes,
+    bookingHorizonDays,
+    dbNow,
+  } = params;
+
+  // 1. Check Date Overrides FIRST (authoritative day off / custom hours for specific date)
+  const startDt = DateTime.fromJSDate(startAt, { zone: "utc" }).setZone(hostTimezone);
+  const endDt = DateTime.fromJSDate(endAt, { zone: "utc" }).setZone(hostTimezone);
+  const hostLocalDate = startDt.toISODate();
+  const weekday = startDt.weekday; // 1=Mon .. 7=Sun
+
+  // Buffered interval in host local timezone
+  const bufStartDt = startDt.minus({ minutes: bufferBefore });
+  const bufEndDt = endDt.plus({ minutes: bufferAfter });
+
+  const overrideRes = await client.query(
+    `SELECT is_available, custom_start_time, custom_end_time 
+     FROM date_overrides 
+     WHERE host_id = $1 AND override_date = $2::date`,
+    [hostId, hostLocalDate]
+  );
+
+  if (overrideRes.rows.length > 0) {
+    const override = overrideRes.rows[0];
+    if (!override.is_available) {
+      throw new AppError("HOST_UNAVAILABLE", 409, "The host is not available on this date");
+    }
+    if (override.custom_start_time && override.custom_end_time) {
+      const s = parseTimeString(override.custom_start_time);
+      const e = parseTimeString(override.custom_end_time);
+
+      const winStart = startDt.set({ hour: s.hour, minute: s.minute, second: 0, millisecond: 0 });
+      const winEnd = startDt.set({ hour: e.hour, minute: e.minute, second: 0, millisecond: 0 });
+
+      if (bufStartDt < winStart || bufEndDt > winEnd) {
+        throw new AppError("OUTSIDE_WORKING_HOURS", 409, "The selected slot falls outside host working hours");
+      }
+    }
+  }
+
+  // 2. Authoritative minimum notice check
+  const minNoticeTime = new Date(dbNow.getTime() + minimumNoticeMinutes * 60 * 1000);
+  if (startAt.getTime() < minNoticeTime.getTime()) {
+    throw new AppError(
+      "MINIMUM_NOTICE_VIOLATION",
+      400,
+      "This time slot does not meet the minimum booking notice requirement."
+    );
+  }
+
+  // 3. Authoritative booking horizon check (in host local calendar day)
+  const nowDt = DateTime.fromJSDate(dbNow, { zone: "utc" });
+  const todayHost = nowDt.setZone(hostTimezone).startOf("day");
+  const maxHorizonHostEnd = todayHost.plus({ days: bookingHorizonDays }).endOf("day");
+  const maxHorizonDate = maxHorizonHostEnd.toJSDate();
+
+  if (startAt.getTime() > maxHorizonDate.getTime()) {
+    throw new AppError(
+      "OUTSIDE_BOOKING_HORIZON",
+      400,
+      "This date is outside the allowed booking horizon."
+    );
+  }
+
+  // 4. (Weekly working hours are filtered during slot generation; date overrides, notice, and horizon are enforced on booking)
+}
+
 export class BookingService {
   /**
    * Creates a 5-minute temporary hold with transactional concurrency safety,
@@ -180,36 +272,21 @@ export class BookingService {
         }
       }
 
-      // Step E: Validate availability against Date Overrides and Weekly Rules
-      if (hostLocalDate) {
-        const overrideRes = await client.query(
-          `SELECT is_available, custom_start_time, custom_end_time 
-           FROM date_overrides 
-           WHERE host_id = $1 AND override_date = $2::date`,
-          [event.host_id, hostLocalDate]
-        );
+      // Step E: Validate availability against Minimum Notice, Booking Horizon, Date Overrides, and Weekly Rules
+      const dbNowRes = await client.query("SELECT clock_timestamp() as now");
+      const dbNow = new Date(dbNowRes.rows[0].now);
 
-        if (overrideRes.rows.length > 0) {
-          const override = overrideRes.rows[0];
-          if (!override.is_available) {
-            throw new AppError("HOST_UNAVAILABLE", 409, "The host is not available on this date");
-          }
-          if (override.custom_start_time && override.custom_end_time) {
-            const startT = parseTimeString(override.custom_start_time);
-            const endT = parseTimeString(override.custom_end_time);
-            const startLocal = DateTime.fromISO(startAt, { zone: "utc" }).setZone(event.home_timezone || "UTC");
-            const endLocal = DateTime.fromISO(endDate.toISOString(), { zone: "utc" }).setZone(event.home_timezone || "UTC");
-            if (
-              startLocal.hour < startT.hour ||
-              (startLocal.hour === startT.hour && startLocal.minute < startT.minute) ||
-              endLocal.hour > endT.hour ||
-              (endLocal.hour === endT.hour && endLocal.minute > endT.minute)
-            ) {
-              throw new AppError("OUTSIDE_WORKING_HOURS", 409, "The selected slot falls outside host working hours");
-            }
-          }
-        }
-      }
+      await validateSlotAgainstHostConstraints(client, {
+        hostId: event.host_id,
+        hostTimezone: event.home_timezone || "UTC",
+        startAt: startDate,
+        endAt: endDate,
+        bufferBefore: event.buffer_before,
+        bufferAfter: event.buffer_after,
+        minimumNoticeMinutes: event.minimum_notice_minutes,
+        bookingHorizonDays: event.booking_horizon_days,
+        dbNow,
+      });
 
       // Step F: Buffer & Schedule collision checking across ALL host bookings
       const conflictBookingsRes = await client.query(
@@ -420,7 +497,7 @@ export class BookingService {
 
       // 3. Verify hold has not expired against database clock
       const timeCheck = await client.query(
-        "SELECT (clock_timestamp() <= $1::timestamptz) as is_valid",
+        "SELECT (clock_timestamp() <= $1::timestamptz) as is_valid, clock_timestamp() as now",
         [booking.hold_expires_at]
       );
       if (!timeCheck.rows[0].is_valid) {
@@ -523,17 +600,28 @@ export class BookingService {
         eventType: "BOOKING_CONFIRMED",
         recipientEmail: effectiveGuestEmail,
         subject: `Confirmed: ${booking.event_name} with ${booking.host_name}`,
-        payload: outboxPayload,
+        payload: {
+          ...outboxPayload,
+          bookingReference: holdId,
+          recipientRole: "GUEST",
+          status: "CONFIRMED",
+        },
       });
 
-      // Host booking notification email
+      // Host booking notification email (recipient-aware, no private guest token exposed)
       await NotificationService.enqueue(client, {
         bookingId: holdId,
         relatedHostId: booking.host_id,
         eventType: "BOOKING_CONFIRMED",
         recipientEmail: booking.host_email,
-        subject: `New Booking: ${effectiveGuestName} — ${booking.event_name}`,
-        payload: outboxPayload,
+        subject: `New Appointment: ${effectiveGuestName} — ${booking.event_name}`,
+        payload: {
+          ...outboxPayload,
+          bookingReference: holdId,
+          recipientRole: "HOST",
+          status: "CONFIRMED",
+          manageUrl: undefined,
+        },
       });
 
       return {
@@ -572,6 +660,7 @@ export class BookingService {
       // 1. Fetch booking with lock
       const bRes = await client.query(
         `SELECT b.*, e.duration_minutes, e.capacity, e.buffer_before, e.buffer_after, e.host_id,
+                e.minimum_notice_minutes, e.booking_horizon_days,
                 e.name as event_name, h.name as host_name, h.email as host_email, h.home_timezone
          FROM bookings b
          JOIN event_types e ON b.event_type_id = e.id
@@ -625,6 +714,21 @@ export class BookingService {
       const newHostLocalDate = DateTime.fromISO(newStartAt, { zone: "utc" })
         .setZone(booking.home_timezone || "UTC")
         .toISODate();
+
+      // Validate host constraints (Minimum notice, booking horizon, working hours, overrides)
+      const dbNowRes = await client.query("SELECT clock_timestamp() as now");
+      const dbNow = new Date(dbNowRes.rows[0].now);
+      await validateSlotAgainstHostConstraints(client, {
+        hostId: booking.host_id,
+        hostTimezone: booking.home_timezone || "UTC",
+        startAt: newStartDate,
+        endAt: newEndDate,
+        bufferBefore: booking.buffer_before,
+        bufferAfter: booking.buffer_after,
+        minimumNoticeMinutes: booking.minimum_notice_minutes,
+        bookingHorizonDays: booking.booking_horizon_days,
+        dbNow,
+      });
 
       // 5. Daily duplicate restriction check on the target date
       if (booking.guest_email && newHostLocalDate) {
@@ -831,13 +935,18 @@ export class BookingService {
       // Enqueue cancellation notification to GUEST and HOST
       const cancelPayload = {
         bookingId: booking.id,
+        bookingReference: booking.id,
         eventName: booking.event_name,
         hostName: booking.host_name,
         hostEmail: booking.host_email,
         guestEmail: booking.guest_email,
         guestName: booking.guest_name,
         startAt: booking.start_at.toISOString(),
+        endAt: booking.end_at ? booking.end_at.toISOString() : undefined,
+        hostTimezone: booking.home_timezone,
         cancellationReason: effectiveReason,
+        cancelledBy: "Guest",
+        status: "CANCELLED",
       };
 
       if (booking.guest_email) {
@@ -846,8 +955,11 @@ export class BookingService {
           relatedHostId: booking.host_id,
           eventType: "BOOKING_CANCELLED",
           recipientEmail: booking.guest_email,
-          subject: `Cancelled: ${booking.event_name} with ${booking.host_name}`,
-          payload: cancelPayload,
+          subject: "Your Slotbook appointment has been cancelled",
+          payload: {
+            ...cancelPayload,
+            recipientRole: "GUEST",
+          },
         });
       }
 
@@ -856,8 +968,11 @@ export class BookingService {
         relatedHostId: booking.host_id,
         eventType: "BOOKING_CANCELLED",
         recipientEmail: booking.host_email,
-        subject: `Cancelled by Guest: ${booking.guest_name || "Guest"} — ${booking.event_name}`,
-        payload: cancelPayload,
+        subject: `Appointment cancellation — ${booking.guest_name || "Guest"}`,
+        payload: {
+          ...cancelPayload,
+          recipientRole: "HOST",
+        },
       });
 
       return {
@@ -923,13 +1038,18 @@ export class BookingService {
       // Enqueue cancellation notification to GUEST and HOST
       const cancelPayload = {
         bookingId: booking.id,
+        bookingReference: booking.id,
         eventName: booking.event_name,
         hostName: booking.host_name,
         hostEmail: booking.host_email,
         guestEmail: booking.guest_email,
         guestName: booking.guest_name,
         startAt: booking.start_at.toISOString(),
+        endAt: booking.end_at ? booking.end_at.toISOString() : undefined,
+        hostTimezone: booking.home_timezone,
         cancellationReason: effectiveReason,
+        cancelledBy: "Host",
+        status: "CANCELLED",
       };
 
       if (booking.guest_email) {
@@ -938,8 +1058,11 @@ export class BookingService {
           relatedHostId: hostId,
           eventType: "HOST_CANCELLED_BOOKING",
           recipientEmail: booking.guest_email,
-          subject: `Appointment Cancelled: ${booking.event_name}`,
-          payload: cancelPayload,
+          subject: "Your Slotbook appointment has been cancelled",
+          payload: {
+            ...cancelPayload,
+            recipientRole: "GUEST",
+          },
         });
       }
 
@@ -948,8 +1071,11 @@ export class BookingService {
         relatedHostId: hostId,
         eventType: "HOST_CANCELLED_BOOKING",
         recipientEmail: booking.host_email,
-        subject: `You Cancelled: ${booking.guest_name || "Guest"} — ${booking.event_name}`,
-        payload: cancelPayload,
+        subject: `Appointment cancellation — ${booking.guest_name || "Guest"}`,
+        payload: {
+          ...cancelPayload,
+          recipientRole: "HOST",
+        },
       });
 
       return {

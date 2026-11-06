@@ -15,6 +15,12 @@ describe("Slotbook API Service Integration", () => {
     await runMigrations(TEST_DB_URL);
     pool = getPool(TEST_DB_URL);
 
+    await pool.query("DELETE FROM idempotency_keys");
+    await pool.query("DELETE FROM active_reservations");
+    await pool.query("DELETE FROM bookings");
+    await pool.query("DELETE FROM event_types");
+    await pool.query("DELETE FROM hosts WHERE email = 'apitester@slotbook.dev'");
+
     // Create host and event
     const hostRes = await pool.query(
       `INSERT INTO hosts (name, email, password_hash, home_timezone)
@@ -24,8 +30,8 @@ describe("Slotbook API Service Integration", () => {
     hostId = hostRes.rows[0].id;
 
     const eventRes = await pool.query(
-      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity)
-       VALUES ($1, 'API Test Event', 'api-test-event', 30, 1)
+      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, booking_horizon_days)
+       VALUES ($1, 'API Test Event', 'api-test-event', 30, 1, 1000)
        RETURNING id`,
       [hostId]
     );

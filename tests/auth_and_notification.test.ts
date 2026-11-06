@@ -308,8 +308,8 @@ describe("Phase 14: Authentication, Database Cleanup, Notifications & Booking Wo
       const hostId = h.rows[0].id;
 
       const e = await pool.query(
-        `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after)
-         VALUES ($1, 'Medical Check', 'medical-check', 30, 1, 10, 10) RETURNING id`,
+        `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after, booking_horizon_days)
+         VALUES ($1, 'Medical Check', 'medical-check', 30, 1, 10, 10, 1000) RETURNING id`,
         [hostId]
       );
       const eventTypeId = e.rows[0].id;

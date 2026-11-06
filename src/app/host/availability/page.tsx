@@ -22,6 +22,7 @@ const WEEKDAYS = [
 ];
 
 export default function HostAvailabilityPage() {
+  const [homeTimezone, setHomeTimezone] = useState("UTC");
   const [weeklyRules, setWeeklyRules] = useState<any[]>([]);
   const [dateOverrides, setDateOverrides] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,8 +52,33 @@ export default function HostAvailabilityPage() {
       const res = await fetch("/api/dashboard/availability");
       if (res.ok) {
         const d = await res.json();
-        setWeeklyRules(d?.data?.weeklyRules || d?.weeklyRules || []);
-        setDateOverrides(d?.data?.dateOverrides || d?.dateOverrides || []);
+        const payload = d?.data || d || {};
+        if (payload.homeTimezone || payload.timezone) {
+          setHomeTimezone(payload.homeTimezone || payload.timezone);
+        }
+
+        // Support either flat rules or grouped weeklyRules
+        if (Array.isArray(payload.rules)) {
+          setWeeklyRules(payload.rules);
+        } else if (Array.isArray(payload.weeklyRules)) {
+          const flat: any[] = [];
+          for (const item of payload.weeklyRules) {
+            if (Array.isArray(item.windows)) {
+              for (const win of item.windows) {
+                flat.push({
+                  weekday: item.weekday,
+                  startTime: win.start.length === 5 ? `${win.start}:00` : win.start,
+                  endTime: win.end.length === 5 ? `${win.end}:00` : win.end,
+                });
+              }
+            } else if (item.startTime && item.endTime) {
+              flat.push(item);
+            }
+          }
+          setWeeklyRules(flat);
+        }
+
+        setDateOverrides(payload.dateOverrides || payload.overrides || []);
       }
     } catch (err) {
       console.error("Failed to load availability:", err);
@@ -62,9 +88,27 @@ export default function HostAvailabilityPage() {
   }
 
   function addWeeklyWindow(weekday: number) {
+    const existing = weeklyRules.filter((r) => r.weekday === weekday);
+    let defaultStart = "09:00:00";
+    let defaultEnd = "17:00:00";
+
+    if (existing.length > 0) {
+      const last = existing[existing.length - 1];
+      const lastEndHour = parseInt(last.endTime.slice(0, 2), 10);
+      if (lastEndHour < 17) {
+        const nextStartHour = Math.min(lastEndHour + 1, 21);
+        const nextEndHour = Math.min(nextStartHour + 4, 22);
+        defaultStart = `${String(nextStartHour).padStart(2, "0")}:00:00`;
+        defaultEnd = `${String(nextEndHour).padStart(2, "0")}:00:00`;
+      } else {
+        defaultStart = "18:00:00";
+        defaultEnd = "21:00:00";
+      }
+    }
+
     setWeeklyRules([
       ...weeklyRules,
-      { weekday, startTime: "09:00:00", endTime: "17:00:00" },
+      { weekday, startTime: defaultStart, endTime: defaultEnd },
     ]);
   }
 
@@ -80,16 +124,59 @@ export default function HostAvailabilityPage() {
   }
 
   async function handleSaveWeekly(confirmConflicts = false) {
-    setSaving(true);
     setError(null);
     setMessage(null);
 
+    // 1. Client-side validation: verify time ranges, duplicates, and overlaps
+    for (const day of WEEKDAYS) {
+      const dayWindows = weeklyRules.filter((r) => r.weekday === day.id);
+      for (let i = 0; i < dayWindows.length; i++) {
+        const win = dayWindows[i];
+        const startStr = win.startTime.slice(0, 5);
+        const endStr = win.endTime.slice(0, 5);
+        if (startStr >= endStr) {
+          setError(`${day.name}: Start time (${startStr}) must be earlier than end time (${endStr}).`);
+          return;
+        }
+
+        for (let j = i + 1; j < dayWindows.length; j++) {
+          const other = dayWindows[j];
+          const oStart = other.startTime.slice(0, 5);
+          const oEnd = other.endTime.slice(0, 5);
+
+          if (startStr === oStart && endStr === oEnd) {
+            setError(`${day.name}: Duplicate window [${startStr} - ${endStr}] detected.`);
+            return;
+          }
+
+          if (startStr < oEnd && oStart < endStr) {
+            setError(`${day.name}: Windows [${startStr} - ${endStr}] and [${oStart} - ${oEnd}] overlap.`);
+            return;
+          }
+        }
+      }
+    }
+
+    setSaving(true);
+
     try {
+      // Structure payload with grouped weekly rules and host timezone
+      const groupedWeeklyRules = WEEKDAYS.map((day) => ({
+        weekday: day.id,
+        windows: weeklyRules
+          .filter((r) => r.weekday === day.id)
+          .map((r) => ({
+            start: r.startTime.slice(0, 5),
+            end: r.endTime.slice(0, 5),
+          })),
+      }));
+
       const res = await fetch("/api/dashboard/availability", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          weeklyRules,
+          timezone: homeTimezone,
+          weeklyRules: groupedWeeklyRules,
           dateOverrides,
           confirmConflicts,
         }),
@@ -97,14 +184,15 @@ export default function HostAvailabilityPage() {
 
       const data = await res.json();
       if (!res.ok) {
-        if (data.data?.requiresConfirmation) {
+        if (data?.data?.requiresConfirmation || data?.requiresConfirmation) {
+          const conf = data.data || data;
           setConflictModal({
-            affectedBookings: data.data.conflictingBookings,
+            affectedBookings: conf.conflictingBookings || conf.affectedBookings || [],
             overrideData: null,
           });
           return;
         }
-        throw new Error(data.error?.message || "Failed to save weekly schedule");
+        throw new Error(data.error?.message || data.message || "Failed to save weekly schedule");
       }
 
       setConflictModal(null);
@@ -121,6 +209,11 @@ export default function HostAvailabilityPage() {
   async function handleAddOverride(confirmConflicts = false) {
     if (!newOverrideDate) {
       setError("Please select a date for the override.");
+      return;
+    }
+
+    if (newOverrideAvailable && newOverrideStart >= newOverrideEnd) {
+      setError(`Override custom hours: Start time (${newOverrideStart}) must be earlier than end time (${newOverrideEnd}).`);
       return;
     }
 

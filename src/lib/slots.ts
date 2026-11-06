@@ -23,7 +23,7 @@ export interface ActiveBooking {
 }
 
 export interface EventTypeConfig {
-  id: string;
+  id?: string;
   durationMinutes: number;
   capacity: number;
   bufferBefore: number;
@@ -38,10 +38,18 @@ export interface AvailableSlot {
   remainingCapacity: number;
 }
 
+function advanceSlot(current: DateTime, stepMinutes: number, latest: DateTime): DateTime {
+  const next = current.plus({ minutes: stepMinutes });
+  if (next > latest && current < latest) {
+    return latest;
+  }
+  return next;
+}
+
 /**
  * Calculates available booking slots for a host and event type within a date range.
- * Fully enforces buffer-before, buffer-after, group capacity, weekly availability,
- * and date overrides.
+ * Fully enforces buffer-before, buffer-after, minimum notice, booking horizon (in host calendar),
+ * group capacity, weekly availability, and date overrides.
  */
 export function calculateAvailableSlots(params: {
   hostTimezone: string;
@@ -64,8 +72,16 @@ export function calculateAvailableSlots(params: {
     now = DateTime.utc(),
   } = params;
 
-  const minNoticeTime = now.plus({ minutes: eventType.minimumNoticeMinutes });
-  const maxHorizonTime = now.plus({ days: eventType.bookingHorizonDays });
+  // Authoritative minimum notice instant in UTC
+  const minNoticeTimeUtc = now.plus({ minutes: eventType.minimumNoticeMinutes });
+
+  // Authoritative booking horizon calculated using host's local calendar day
+  const nowInHostTz = now.setZone(hostTimezone);
+  const maxHorizonHostLocalEnd = nowInHostTz
+    .startOf("day")
+    .plus({ days: eventType.bookingHorizonDays })
+    .endOf("day");
+  const maxHorizonTimeUtc = maxHorizonHostLocalEnd.toUTC();
 
   // Map overrides by date string YYYY-MM-DD
   const overrideMap = new Map<string, DateOverride>();
@@ -83,12 +99,12 @@ export function calculateAvailableSlots(params: {
 
   const availableSlots: AvailableSlot[] = [];
 
-  // Iterate calendar days in host's timezone
+  // Iterate calendar days in host's local timezone
   let currentDay = from.setZone(hostTimezone).startOf("day");
   const endDay = to.setZone(hostTimezone).endOf("day");
 
-  // Step interval for slots (e.g. 15 or 30 min)
-  const stepMinutes = Math.min(eventType.durationMinutes, 30);
+  // Step interval for slots (e.g. 15 minutes)
+  const stepMinutes = Math.min(eventType.durationMinutes, 15);
 
   while (currentDay <= endDay) {
     const dateStr = currentDay.toISODate(); // "YYYY-MM-DD"
@@ -110,7 +126,7 @@ export function calculateAvailableSlots(params: {
             endMin: e.minute,
           });
         } else {
-          // Available using normal rules
+          // Available using normal weekday rules
           const weekdayRules = rulesByWeekday.get(weekday) || [];
           for (const r of weekdayRules) {
             const s = parseTimeString(r.startTime);
@@ -140,7 +156,7 @@ export function calculateAvailableSlots(params: {
       }
     }
 
-    // Evaluate each window on this day
+    // Evaluate each window on this day independently
     for (const win of dayWindows) {
       const windowStart = createZonedDateTime(
         currentDay.year,
@@ -160,31 +176,47 @@ export function calculateAvailableSlots(params: {
       );
 
       if (!windowStart || !windowEnd) {
-        // Skipped due to DST nonexistent gap
+        // Skipped due to DST gap
         continue;
       }
 
-      let slotStart = windowStart;
+      // Valid meeting starts must fit entirely inside the host's availability window after accounting for buffers:
+      // Meeting: [slotStart, slotEnd] where slotEnd = slotStart + duration
+      // Reserved: [slotStart - bufferBefore, slotEnd + bufferAfter]
+      // Requirement:
+      // slotStart - bufferBefore >= windowStart => slotStart >= windowStart + bufferBefore
+      // slotEnd + bufferAfter <= windowEnd => slotStart <= windowEnd - duration - bufferAfter
+      const earliestStart = windowStart.plus({ minutes: eventType.bufferBefore });
+      const latestStart = windowEnd.minus({
+        minutes: eventType.durationMinutes + eventType.bufferAfter,
+      });
 
-      while (slotStart.plus({ minutes: eventType.durationMinutes }) <= windowEnd) {
+      if (earliestStart > latestStart) {
+        // Window is too small to host meeting duration + buffers
+        continue;
+      }
+
+      let slotStart = earliestStart;
+
+      while (slotStart <= latestStart) {
         const slotEnd = slotStart.plus({ minutes: eventType.durationMinutes });
         const slotStartUtc = slotStart.toUTC();
         const slotEndUtc = slotEnd.toUTC();
 
-        // 1. Notice check
-        if (slotStartUtc < minNoticeTime) {
-          slotStart = slotStart.plus({ minutes: stepMinutes });
+        // 1. Authoritative minimum notice check
+        if (slotStartUtc < minNoticeTimeUtc) {
+          slotStart = advanceSlot(slotStart, stepMinutes, latestStart);
           continue;
         }
 
-        // 2. Horizon check
-        if (slotStartUtc > maxHorizonTime) {
-          slotStart = slotStart.plus({ minutes: stepMinutes });
+        // 2. Authoritative booking horizon check
+        if (slotStartUtc > maxHorizonTimeUtc) {
+          slotStart = advanceSlot(slotStart, stepMinutes, latestStart);
           continue;
         }
 
-        // 3. Existing bookings & buffer check
-        // Candidate slot reserved buffered range:
+        // 3. Existing bookings & cross-event buffer collision check
+        // Candidate slot reserved buffered range in UTC milliseconds:
         // [candidateBufStart, candidateBufEnd)
         const candidateBufStart = slotStartUtc.minus({ minutes: eventType.bufferBefore }).toMillis();
         const candidateBufEnd = slotEndUtc.plus({ minutes: eventType.bufferAfter }).toMillis();
@@ -201,14 +233,13 @@ export function calculateAvailableSlots(params: {
           // Check if this booking belongs to the exact same group session
           if (
             eventType.capacity > 1 &&
+            eventType.id &&
             b.eventTypeId === eventType.id &&
             bookingStartMillis === slotStartUtc.toMillis()
           ) {
             activeCount++;
           } else {
-            // Either 1-on-1, another event type, or an adjacent/different slot of the same event:
-            // Check for buffer overlap:
-            // Ranges overlap if: start1 < end2 AND start2 < end1
+            // Buffer collision: intervals overlap if candidateBufStart < bookingBufEnd AND bookingBufStart < candidateBufEnd
             if (candidateBufStart < bookingBufEnd && bookingBufStart < candidateBufEnd) {
               isBlocked = true;
               break;
@@ -224,7 +255,7 @@ export function calculateAvailableSlots(params: {
           });
         }
 
-        slotStart = slotStart.plus({ minutes: stepMinutes });
+        slotStart = advanceSlot(slotStart, stepMinutes, latestStart);
       }
     }
 

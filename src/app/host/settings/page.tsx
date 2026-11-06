@@ -74,8 +74,7 @@ export default function HostSettingsPage() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          weeklyRules: [],
-          dateOverrides: [],
+          timezone: homeTimezone,
         }),
       });
       setMessage("Timezone saved successfully!");

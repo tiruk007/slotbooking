@@ -47,8 +47,8 @@ describe("Slotbook Concurrency and Reliability Test Suite", () => {
   it("Test 1 — Concurrent booking: 20 simultaneous requests for capacity=1 slot results in exactly 1 reservation", async () => {
     // 1. Create capacity-1 event type
     const eventRes = await pool.query(
-      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after)
-       VALUES ($1, '1-on-1 Meeting', '1-on-1-test', 30, 1, 0, 0)
+      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after, booking_horizon_days)
+       VALUES ($1, '1-on-1 Meeting', '1-on-1-test', 30, 1, 0, 0, 1000)
        RETURNING id`,
       [testHostId]
     );
@@ -102,8 +102,8 @@ describe("Slotbook Concurrency and Reliability Test Suite", () => {
   // TEST 2 — Group capacity
   it("Test 2 — Group capacity: 20 simultaneous requests for capacity=3 slot results in exactly 3 reservations", async () => {
     const eventRes = await pool.query(
-      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after)
-       VALUES ($1, 'Group Workshop', 'group-test', 30, 3, 0, 0)
+      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after, booking_horizon_days)
+       VALUES ($1, 'Group Workshop', 'group-test', 30, 3, 0, 0, 1000)
        RETURNING id`,
       [testHostId]
     );
@@ -141,8 +141,8 @@ describe("Slotbook Concurrency and Reliability Test Suite", () => {
   // TEST 3 — Idempotency
   it("Test 3 — Idempotency: duplicate key with same payload returns original result; different payload returns conflict", async () => {
     const eventRes = await pool.query(
-      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity)
-       VALUES ($1, 'Idempotency Test', 'idemp-test', 30, 1)
+      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, booking_horizon_days)
+       VALUES ($1, 'Idempotency Test', 'idemp-test', 30, 1, 1000)
        RETURNING id`,
       [testHostId]
     );
@@ -196,8 +196,8 @@ describe("Slotbook Concurrency and Reliability Test Suite", () => {
   // TEST 4 — Expired hold
   it("Test 4 — Expired hold: expired hold does not consume capacity and allows replacement reservation", async () => {
     const eventRes = await pool.query(
-      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity)
-       VALUES ($1, 'Expiry Test', 'expiry-test', 30, 1)
+      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, booking_horizon_days)
+       VALUES ($1, 'Expiry Test', 'expiry-test', 30, 1, 1000)
        RETURNING id`,
       [testHostId]
     );
@@ -238,8 +238,8 @@ describe("Slotbook Concurrency and Reliability Test Suite", () => {
   // TEST 5 — Confirmation race
   it("Test 5 — Confirmation race: booking cannot transition to confirmed after database-authoritative expiry", async () => {
     const eventRes = await pool.query(
-      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity)
-       VALUES ($1, 'Confirm Race Test', 'confirm-race-test', 30, 1)
+      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, booking_horizon_days)
+       VALUES ($1, 'Confirm Race Test', 'confirm-race-test', 30, 1, 1000)
        RETURNING id`,
       [testHostId]
     );
@@ -289,8 +289,8 @@ describe("Slotbook Concurrency and Reliability Test Suite", () => {
   // TEST 6 — Rescheduling
   it("Test 6 — Rescheduling: moves reservation atomically; collision leaves original booking intact", async () => {
     const eventRes = await pool.query(
-      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity)
-       VALUES ($1, 'Reschedule Test', 'reschedule-test', 30, 1)
+      `INSERT INTO event_types (host_id, name, slug, duration_minutes, capacity, booking_horizon_days)
+       VALUES ($1, 'Reschedule Test', 'reschedule-test', 30, 1, 1000)
        RETURNING id`,
       [testHostId]
     );

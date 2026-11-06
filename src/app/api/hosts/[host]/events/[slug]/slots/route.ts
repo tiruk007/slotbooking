@@ -53,14 +53,20 @@ export async function GET(
     }
     const event = eventRes.rows[0];
 
-    // 3. Define time window (default: next 30 days)
-    const now = DateTime.utc();
+    // 3. Obtain database-authoritative current time
+    const dbNowRes = await pool.query("SELECT clock_timestamp() as now");
+    const now = DateTime.fromJSDate(new Date(dbNowRes.rows[0].now), { zone: "utc" });
+
+    const hostTz = host.home_timezone || "UTC";
+    const todayHost = now.setZone(hostTz).startOf("day");
+    const maxHorizonDate = todayHost.plus({ days: event.booking_horizon_days || 30 }).endOf("day");
+
     const from = fromParam
       ? DateTime.fromISO(fromParam, { zone: "utc" })
       : now;
     const to = toParam
       ? DateTime.fromISO(toParam, { zone: "utc" })
-      : now.plus({ days: event.booking_horizon_days || 30 });
+      : maxHorizonDate.toUTC();
 
     if (!from.isValid || !to.isValid || from >= to) {
       throw new AppError("INVALID_DATE_RANGE", 400, "Invalid from/to date range");

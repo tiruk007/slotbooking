@@ -2,21 +2,31 @@ import { NextRequest } from "next/server";
 import { getSession } from "@/lib/auth";
 import { getPool, withTransaction } from "@/db";
 import { isValidIanaZone } from "@/lib/timezone";
-import { availabilityRuleSchema, dateOverrideSchema } from "@/lib/validations";
+import { updateAvailabilityInputSchema } from "@/lib/validations";
 import { NotificationService } from "@/lib/notification-service";
 import { apiSuccess, apiError } from "@/lib/api-utils";
 import { AppError } from "@/lib/booking-service";
-import { z } from "zod";
 
 export const dynamic = "force-dynamic";
 
-const updateAvailabilitySchema = z.object({
-  homeTimezone: z.string().optional(),
-  rules: z.array(availabilityRuleSchema),
-  overrides: z.array(dateOverrideSchema),
-  confirmCancellation: z.boolean().optional(),
-  cancellationReason: z.string().optional(),
-});
+interface NormalizedRule {
+  weekday: number;
+  startTime: string; // HH:mm:ss
+  endTime: string; // HH:mm:ss
+}
+
+function normalizeTime(t: string): string {
+  const parts = t.trim().split(":");
+  if (parts.length === 2) {
+    return `${parts[0].padStart(2, "0")}:${parts[1].padStart(2, "0")}:00`;
+  }
+  return `${parts[0].padStart(2, "0")}:${parts[1].padStart(2, "0")}:${(parts[2] || "00").padStart(2, "0")}`;
+}
+
+function timeToMinutes(t: string): number {
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+}
 
 export async function GET() {
   try {
@@ -29,9 +39,10 @@ export async function GET() {
 
     // 1. Host info
     const hostRes = await pool.query(
-      "SELECT home_timezone as \"homeTimezone\" FROM hosts WHERE id = $1",
+      `SELECT home_timezone as "homeTimezone" FROM hosts WHERE id = $1`,
       [session.id]
     );
+    const hostTimezone = hostRes.rows[0]?.homeTimezone || "UTC";
 
     // 2. Rules
     const rulesRes = await pool.query(
@@ -52,9 +63,23 @@ export async function GET() {
       [session.id]
     );
 
+    // Group rules by weekday (1..7)
+    const groupedWeeklyRules = [1, 2, 3, 4, 5, 6, 7].map((w) => ({
+      weekday: w,
+      windows: rulesRes.rows
+        .filter((r) => r.weekday === w)
+        .map((r) => ({
+          start: r.startTime.slice(0, 5),
+          end: r.endTime.slice(0, 5),
+        })),
+    }));
+
     return apiSuccess({
-      homeTimezone: hostRes.rows[0]?.homeTimezone || "UTC",
+      homeTimezone: hostTimezone,
+      timezone: hostTimezone,
+      weeklyRules: groupedWeeklyRules,
       rules: rulesRes.rows,
+      dateOverrides: overridesRes.rows,
       overrides: overridesRes.rows,
     });
   } catch (err) {
@@ -70,16 +95,127 @@ export async function PUT(request: NextRequest) {
     }
 
     const rawBody = await request.json();
-    const validated = updateAvailabilitySchema.parse(rawBody);
+    const validated = updateAvailabilityInputSchema.parse(rawBody);
 
-    if (validated.homeTimezone && !isValidIanaZone(validated.homeTimezone)) {
-      throw new AppError("INVALID_TIMEZONE", 400, `Invalid IANA timezone: ${validated.homeTimezone}`);
+    const targetTimezone = validated.timezone || validated.homeTimezone;
+    if (targetTimezone && !isValidIanaZone(targetTimezone)) {
+      throw new AppError("INVALID_TIMEZONE", 400, `Invalid IANA timezone: ${targetTimezone}`);
     }
 
-    const pool = getPool();
+    // 1. Normalize weekly availability rules
+    const normalizedRules: NormalizedRule[] = [];
+    const rawWeekly = validated.weeklyRules || validated.rules;
 
-    // Find all unavailable overrides (days off)
-    const unavailableDates = validated.overrides
+    if (rawWeekly !== undefined) {
+      for (const item of rawWeekly) {
+        if ("windows" in item && Array.isArray(item.windows)) {
+          // Grouped weekday windows
+          for (const win of item.windows) {
+            normalizedRules.push({
+              weekday: item.weekday,
+              startTime: normalizeTime(win.start),
+              endTime: normalizeTime(win.end),
+            });
+          }
+        } else if ("startTime" in item && "endTime" in item) {
+          // Flat rule
+          normalizedRules.push({
+            weekday: item.weekday,
+            startTime: normalizeTime(item.startTime),
+            endTime: normalizeTime(item.endTime),
+          });
+        }
+      }
+
+      // Group and validate rules per weekday
+      const rulesByDay = new Map<number, NormalizedRule[]>();
+      for (const rule of normalizedRules) {
+        if (rule.weekday < 1 || rule.weekday > 7) {
+          throw new AppError("VALIDATION_ERROR", 400, "Weekday must be between 1 (Monday) and 7 (Sunday)");
+        }
+
+        const startMin = timeToMinutes(rule.startTime);
+        const endMin = timeToMinutes(rule.endTime);
+
+        if (startMin >= endMin) {
+          throw new AppError(
+            "INVALID_TIME_RANGE",
+            400,
+            `Start time (${rule.startTime.slice(0, 5)}) must be earlier than end time (${rule.endTime.slice(0, 5)})`
+          );
+        }
+
+        const list = rulesByDay.get(rule.weekday) || [];
+        list.push(rule);
+        rulesByDay.set(rule.weekday, list);
+      }
+
+      // Check for duplicate or overlapping windows on the same day
+      for (const [day, dayRules] of Array.from(rulesByDay.entries())) {
+        for (let i = 0; i < dayRules.length; i++) {
+          for (let j = i + 1; j < dayRules.length; j++) {
+            const a = dayRules[i];
+            const b = dayRules[j];
+
+            const aStart = timeToMinutes(a.startTime);
+            const aEnd = timeToMinutes(a.endTime);
+            const bStart = timeToMinutes(b.startTime);
+            const bEnd = timeToMinutes(b.endTime);
+
+            // Duplicate window check
+            if (aStart === bStart && aEnd === bEnd) {
+              throw new AppError(
+                "DUPLICATE_WINDOW",
+                400,
+                `Duplicate availability window detected on weekday ${day}: ${a.startTime.slice(0, 5)} - ${a.endTime.slice(0, 5)}`
+              );
+            }
+
+            // Overlapping window check
+            if (aStart < bEnd && bStart < aEnd) {
+              throw new AppError(
+                "OVERLAPPING_WINDOWS",
+                400,
+                `Availability windows on weekday ${day} overlap: [${a.startTime.slice(0, 5)}, ${a.endTime.slice(0, 5)}] and [${b.startTime.slice(0, 5)}, ${b.endTime.slice(0, 5)}]`
+              );
+            }
+          }
+        }
+      }
+    }
+
+    // 2. Normalize date overrides
+    const rawOverrides = validated.dateOverrides || validated.overrides;
+    const normalizedOverrides = (rawOverrides || []).map((o) => {
+      let customStart: string | null = null;
+      let customEnd: string | null = null;
+
+      if (o.isAvailable && o.customStartTime && o.customEndTime) {
+        customStart = normalizeTime(o.customStartTime);
+        customEnd = normalizeTime(o.customEndTime);
+
+        if (timeToMinutes(customStart) >= timeToMinutes(customEnd)) {
+          throw new AppError(
+            "INVALID_TIME_RANGE",
+            400,
+            `Override custom start time (${customStart.slice(0, 5)}) must be earlier than end time (${customEnd.slice(0, 5)})`
+          );
+        }
+      }
+
+      return {
+        overrideDate: o.overrideDate,
+        isAvailable: o.isAvailable,
+        customStartTime: customStart,
+        customEndTime: customEnd,
+      };
+    });
+
+    const pool = getPool();
+    const shouldConfirm = validated.confirmConflicts ?? validated.confirmCancellation ?? false;
+
+    // 3. Find affected bookings if days off were marked
+    const unavailableDates = normalizedOverrides
       .filter((o) => !o.isAvailable)
       .map((o) => o.overrideDate);
 
@@ -98,12 +234,11 @@ export async function PUT(request: NextRequest) {
       affectedBookings = affectedRes.rows;
     }
 
-    // If bookings are scheduled on days off and confirmation not provided, warn host
-    if (affectedBookings.length > 0 && !validated.confirmCancellation) {
+    if (affectedBookings.length > 0 && !shouldConfirm) {
       return apiSuccess({
         requiresConfirmation: true,
         affectedBookingsCount: affectedBookings.length,
-        affectedBookings: affectedBookings.map((b) => ({
+        conflictingBookings: affectedBookings.map((b) => ({
           id: b.id,
           guestName: b.guest_name,
           guestEmail: b.guest_email,
@@ -114,18 +249,19 @@ export async function PUT(request: NextRequest) {
       }, 200);
     }
 
+    // 4. Transactionally apply changes
     await withTransaction(pool, async (client) => {
-      // 1. Update timezone if provided
-      if (validated.homeTimezone) {
+      // Timezone
+      if (targetTimezone) {
         await client.query("UPDATE hosts SET home_timezone = $1 WHERE id = $2", [
-          validated.homeTimezone,
+          targetTimezone,
           session.id,
         ]);
       }
 
-      // 2. Cancel affected bookings if confirmed
-      if (affectedBookings.length > 0 && validated.confirmCancellation) {
-        const cancelReason = validated.cancellationReason || "Host is unavailable on this date";
+      // Cancel affected bookings if confirmed
+      if (affectedBookings.length > 0 && shouldConfirm) {
+        const cancelReason = validated.cancellationReason || "Host marked date as unavailable";
         for (const b of affectedBookings) {
           await client.query(
             `UPDATE bookings
@@ -141,7 +277,8 @@ export async function PUT(request: NextRequest) {
           if (b.guest_email) {
             await NotificationService.enqueue(client, {
               bookingId: b.id,
-              eventType: "BOOKING_CANCELLED",
+              relatedHostId: session.id,
+              eventType: "HOST_CANCELLED_BOOKING",
               recipientEmail: b.guest_email,
               subject: `Appointment Cancelled: ${b.event_name}`,
               payload: {
@@ -152,36 +289,41 @@ export async function PUT(request: NextRequest) {
                 guestEmail: b.guest_email,
                 startAt: new Date(b.start_at).toISOString(),
                 cancellationReason: cancelReason,
+                cancelledBy: "Host",
               },
             });
           }
         }
       }
 
-      // 3. Replace availability rules
-      await client.query("DELETE FROM availability_rules WHERE host_id = $1", [session.id]);
-      for (const rule of validated.rules) {
-        await client.query(
-          `INSERT INTO availability_rules (host_id, weekday, start_time, end_time)
-           VALUES ($1, $2, $3::time, $4::time)`,
-          [session.id, rule.weekday, rule.startTime, rule.endTime]
-        );
+      // Replace weekly availability rules (only if provided)
+      if (rawWeekly !== undefined) {
+        await client.query("DELETE FROM availability_rules WHERE host_id = $1", [session.id]);
+        for (const rule of normalizedRules) {
+          await client.query(
+            `INSERT INTO availability_rules (host_id, weekday, start_time, end_time)
+             VALUES ($1, $2, $3::time, $4::time)`,
+            [session.id, rule.weekday, rule.startTime, rule.endTime]
+          );
+        }
       }
 
-      // 4. Replace date overrides
-      await client.query("DELETE FROM date_overrides WHERE host_id = $1", [session.id]);
-      for (const o of validated.overrides) {
-        await client.query(
-          `INSERT INTO date_overrides (host_id, override_date, is_available, custom_start_time, custom_end_time)
-           VALUES ($1, $2::date, $3, $4::time, $5::time)`,
-          [
-            session.id,
-            o.overrideDate,
-            o.isAvailable,
-            o.customStartTime || null,
-            o.customEndTime || null,
-          ]
-        );
+      // Replace date overrides (only if provided)
+      if (rawOverrides !== undefined) {
+        await client.query("DELETE FROM date_overrides WHERE host_id = $1", [session.id]);
+        for (const o of normalizedOverrides) {
+          await client.query(
+            `INSERT INTO date_overrides (host_id, override_date, is_available, custom_start_time, custom_end_time)
+             VALUES ($1, $2::date, $3, $4::time, $5::time)`,
+            [
+              session.id,
+              o.overrideDate,
+              o.isAvailable,
+              o.customStartTime || null,
+              o.customEndTime || null,
+            ]
+          );
+        }
       }
     });
 
@@ -189,8 +331,22 @@ export async function PUT(request: NextRequest) {
       console.error("Outbox process error:", e.message)
     );
 
+    // Group rules for response
+    const groupedWeeklyRules = [1, 2, 3, 4, 5, 6, 7].map((w) => ({
+      weekday: w,
+      windows: normalizedRules
+        .filter((r) => r.weekday === w)
+        .map((r) => ({
+          start: r.startTime.slice(0, 5),
+          end: r.endTime.slice(0, 5),
+        })),
+    }));
+
     return apiSuccess({
-      message: "Availability schedule and overrides updated successfully",
+      message: "Weekly availability rules saved successfully!",
+      weeklyRules: groupedWeeklyRules,
+      rules: normalizedRules,
+      dateOverrides: normalizedOverrides,
       affectedBookingsCancelled: affectedBookings.length,
     });
   } catch (err) {
