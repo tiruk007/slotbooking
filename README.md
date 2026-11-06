@@ -17,8 +17,8 @@ All submission deliverables are organized in [`docs/assessment/`](./docs/assessm
 | Resource | Format | Description |
 | :--- | :--- | :--- |
 | [**Reviewer Guide & Submission Index**](./docs/assessment/README_FOR_REVIEWER.md) | Markdown | Executive overview, test breakdown, and verification checklist. |
-| [**Technical Assessment Presentation**](./docs/assessment/Presentation/Slotbook_Assessment_Presentation.pptx) | PowerPoint (PPTX) | 8-slide presentation with embedded 5-minute speaker script in slide notes. |
-| [**Presentation Slides**](./docs/assessment/Presentation/Slotbook_Assessment_Presentation.pdf) | PDF (16:9) | Formatted widescreen slide deck with visible speaker script callouts. |
+| [**5-Minute Speaker & Teleprompter Script**](./docs/assessment/SPEAKER_SCRIPT.md) | Markdown | Word-for-word 5-minute teleprompter narration matching all 5 assessment beats. |
+| [**Speaker Script (PDF)**](./docs/assessment/SPEAKER_SCRIPT.pdf) | PDF (3 Pages) | Printable PDF teleprompter script for the 5-minute video recording. |
 | [**Architecture & Reliability Report**](./docs/assessment/Architecture/Slotbook_Architecture_and_Reliability_Report.pdf) | PDF (9 Pages) | Deep-dive engineering report: GiST exclusion, outbox pattern, ER model, timezone math. |
 | [**Fresh PC Setup Guide**](./docs/assessment/Setup_Guide/FRESH_PC_SETUP_GUIDE.md) | Markdown | Zero-prerequisite setup guide for a brand-new Windows 10/11 laptop. |
 | [**Fresh PC Setup Guide (PDF)**](./docs/assessment/Setup_Guide/Slotbook_Fresh_PC_Setup_Guide.pdf) | PDF | Printable PDF format of the zero-prerequisite setup guide. |
