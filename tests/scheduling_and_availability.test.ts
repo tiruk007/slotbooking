@@ -172,9 +172,42 @@ describe("Part 9: Scheduling, Availability, Horizon & Notifications Test Suite",
       const slotAt0910 = slots.find((s) => DateTime.fromISO(s.startAt).setZone("Asia/Kolkata").toFormat("HH:mm") === "09:10");
       expect(slotAt0910).toBeDefined();
 
-      // Slot at 10:45 (buffered 10:35-11:30) is inside [09:00, 11:30)
-      const slotAt1045 = slots.find((s) => DateTime.fromISO(s.startAt).setZone("Asia/Kolkata").toFormat("HH:mm") === "10:45");
-      expect(slotAt1045).toBeDefined();
+      // Slot at 10:05 (buffered 09:55-10:50) is inside [09:00, 11:30)
+      const slotAt1005 = slots.find((s) => DateTime.fromISO(s.startAt).setZone("Asia/Kolkata").toFormat("HH:mm") === "10:05");
+      expect(slotAt1005).toBeDefined();
+
+      // Total slots for 09:00-11:30 with 30m duration + 10m before + 15m after (55m step) is exactly 2 slots: 09:10, 10:05
+      expect(slots.length).toBe(2);
+    });
+
+    it("generates strictly non-overlapping buffered slots using Duration + BufferBefore + BufferAfter step interval", () => {
+      // Prompt specification: 09:00-12:00 window, 30m duration, 10m buffer before, 10m buffer after
+      // Step = 30 + 10 + 10 = 50m. Expected starts: 09:10, 10:00, 10:50. (11:40 discarded because 12:10 + 10m > 12:00)
+      const testNow = DateTime.fromISO("2026-11-09T00:00:00.000Z").setZone("Asia/Kolkata");
+      const slots = calculateAvailableSlots({
+        hostTimezone: "Asia/Kolkata",
+        from: testNow.startOf("day"),
+        to: testNow.endOf("day"),
+        eventType: {
+          durationMinutes: 30,
+          capacity: 1,
+          bufferBefore: 10,
+          bufferAfter: 10,
+          minimumNoticeMinutes: 0,
+          bookingHorizonDays: 14,
+        },
+        rules: [
+          { weekday: 1, startTime: "09:00:00", endTime: "12:00:00" },
+        ],
+        overrides: [],
+        existingBookings: [],
+        now: testNow,
+      });
+
+      const startTimes = slots.map((s) =>
+        DateTime.fromISO(s.startAt).setZone("Asia/Kolkata").toFormat("HH:mm")
+      );
+      expect(startTimes).toEqual(["09:10", "10:00", "10:50"]);
     });
 
     it("prevents booking an adjacent slot when buffer time intersects existing booking", async () => {
@@ -342,7 +375,7 @@ describe("Part 9: Scheduling, Availability, Horizon & Notifications Test Suite",
         now,
       });
 
-      expect(slots.length).toBe(31); // 15-minute slot increments between 09:00 and 16:30 for 30m meetings
+      expect(slots.length).toBe(16); // 30-minute consecutive meeting slots between 09:00 and 16:30 (8 hours = 16 meetings)
 
       // First slot in IST is 09:00:00 IST -> 03:30:00.000Z
       expect(slots[0].startAt).toBe("2026-11-09T03:30:00.000Z");

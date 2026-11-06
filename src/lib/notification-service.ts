@@ -1,4 +1,5 @@
 import { PoolClient } from "pg";
+import { DateTime } from "luxon";
 import { getPool } from "@/db";
 import { EmailService } from "./email-service";
 
@@ -92,19 +93,46 @@ function emailShell(contentHtml: string, previewText: string = "Slotbook Notific
 </html>`.trim();
 }
 
+export function formatAppointmentInTimezone(startIso?: string, endIso?: string, tz: string = "UTC"): {
+  dateStr: string;
+  timeRangeStr: string;
+  fullStr: string;
+} {
+  if (!startIso) return { dateStr: "N/A", timeRangeStr: "N/A", fullStr: "N/A" };
+  try {
+    const s = DateTime.fromISO(startIso, { zone: "utc" }).setZone(tz);
+    const dateStr = s.toFormat("cccc, LLLL d, yyyy");
+    const tzAbbr = s.offsetNameShort || s.toFormat("ZZZZ") || tz;
+    const sTime = s.toFormat("hh:mm a");
+
+    if (endIso) {
+      const e = DateTime.fromISO(endIso, { zone: "utc" }).setZone(tz);
+      const eTime = e.toFormat("hh:mm a");
+      const timeRangeStr = `${sTime} – ${eTime} ${tzAbbr} (${tz})`;
+      return {
+        dateStr,
+        timeRangeStr,
+        fullStr: `${dateStr} • ${timeRangeStr}`,
+      };
+    } else {
+      const timeRangeStr = `${sTime} ${tzAbbr} (${tz})`;
+      return {
+        dateStr,
+        timeRangeStr,
+        fullStr: `${dateStr} • ${timeRangeStr}`,
+      };
+    }
+  } catch {
+    return { dateStr: startIso, timeRangeStr: "", fullStr: startIso };
+  }
+}
+
 function formatDisplayDate(iso: string | undefined, tz: string = "UTC"): string {
   if (!iso) return "N/A";
   try {
-    const d = new Date(iso);
-    return d.toLocaleString("en-US", {
-      timeZone: tz,
-      weekday: "short",
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
+    const dt = DateTime.fromISO(iso, { zone: "utc" }).setZone(tz);
+    const tzAbbr = dt.offsetNameShort || dt.toFormat("ZZZZ") || tz;
+    return `${dt.toFormat("cccc, LLLL d, yyyy 'at' hh:mm a")} ${tzAbbr} (${tz})`;
   } catch {
     return iso;
   }
@@ -209,7 +237,9 @@ export class NotificationService {
       p.recipientRole === "HOST" ||
       (recipientEmail && p.hostEmail && recipientEmail.toLowerCase() === p.hostEmail.toLowerCase());
 
-    const displayTz = p.hostTimezone || p.guestTimezone || "UTC";
+    const displayTz = isHostRecipient
+      ? (p.hostTimezone || "UTC")
+      : (p.guestTimezone || p.hostTimezone || "UTC");
     const bookingRef = p.bookingReference || p.bookingId || "N/A";
 
     switch (eventType) {
@@ -261,6 +291,8 @@ This code will expire in 5 minutes. If you did not request this verification, yo
           ? `You have a confirmed booking with <strong>${p.guestName || "Guest"}</strong>.`
           : `You are scheduled with <strong>${p.hostName || "Host"}</strong>.`;
 
+        const appt = formatAppointmentInTimezone(p.startAt, p.endAt, displayTz);
+
         const text = `
 Slotbook — ${headline}
 
@@ -269,7 +301,8 @@ ${subheadline.replace(/<[^>]*>/g, "")}
 Appointment Details:
 • Booking Reference: ${bookingRef}
 • Event: ${p.eventName}
-• Date & Time: ${formatDisplayDate(p.startAt, displayTz)} - ${formatDisplayDate(p.endAt, displayTz)} (${displayTz})
+• Date: ${appt.dateStr}
+• Time: ${appt.timeRangeStr}
 • Host: ${p.hostName} (${p.hostEmail || ""})
 • Guest: ${p.guestName} (${p.guestEmail || ""})
 • Meeting Purpose: ${p.meetingPurpose || "General Appointment"}
@@ -308,14 +341,16 @@ The Slotbook Team
                 <td style="padding: 6px 0; color: #0f172a; font-weight: 700;">${p.eventName}</td>
               </tr>
               <tr>
-                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Date &amp; Time:</td>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Date:</td>
                 <td style="padding: 6px 0; color: #0f172a; font-weight: 700;">
-                  ${formatDisplayDate(p.startAt, displayTz)}
+                  ${appt.dateStr}
                 </td>
               </tr>
               <tr>
-                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Timezone:</td>
-                <td style="padding: 6px 0; color: #0f172a;">${displayTz}</td>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Time:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-weight: 700;">
+                  ${appt.timeRangeStr}
+                </td>
               </tr>
               <tr>
                 <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Host:</td>
@@ -366,6 +401,9 @@ The Slotbook Team
       // 3. Booking Rescheduled
       case "BOOKING_RESCHEDULED": {
         const headline = "Appointment Rescheduled";
+        const prevAppt = formatAppointmentInTimezone(p.previousStartAt, undefined, displayTz);
+        const newAppt = formatAppointmentInTimezone(p.newStartAt, p.newEndAt, displayTz);
+
         const text = `
 Slotbook — Appointment Rescheduled
 
@@ -374,9 +412,9 @@ The appointment for "${p.eventName}" has been rescheduled.
 
 • Booking Reference: ${bookingRef}
 • Event: ${p.eventName}
-• Previous Time: ${formatDisplayDate(p.previousStartAt, displayTz)}
-• New Time: ${formatDisplayDate(p.newStartAt, displayTz)}
-• Timezone: ${displayTz}
+• Previous Time: ${prevAppt.fullStr}
+• New Date: ${newAppt.dateStr}
+• New Time: ${newAppt.timeRangeStr}
 • Host: ${p.hostName}
 • Guest: ${p.guestName}
 • Purpose: ${p.meetingPurpose || "General Appointment"}
@@ -402,15 +440,15 @@ ${!isHostRecipient && fullManageUrl ? `Manage Appointment:\n${fullManageUrl}\n` 
               </tr>
               <tr>
                 <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Previous Time:</td>
-                <td style="padding: 6px 0; color: #94a3b8; text-decoration: line-through;">${formatDisplayDate(p.previousStartAt, displayTz)}</td>
+                <td style="padding: 6px 0; color: #94a3b8; text-decoration: line-through;">${prevAppt.fullStr}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">New Date:</td>
+                <td style="padding: 6px 0; color: #059669; font-weight: 700;">${newAppt.dateStr}</td>
               </tr>
               <tr>
                 <td style="padding: 6px 0; color: #64748b; font-weight: 600;">New Time:</td>
-                <td style="padding: 6px 0; color: #059669; font-weight: 700;">${formatDisplayDate(p.newStartAt, displayTz)}</td>
-              </tr>
-              <tr>
-                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Timezone:</td>
-                <td style="padding: 6px 0; color: #0f172a;">${displayTz}</td>
+                <td style="padding: 6px 0; color: #059669; font-weight: 700;">${newAppt.timeRangeStr}</td>
               </tr>
               <tr>
                 <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Meeting Purpose:</td>
@@ -444,17 +482,22 @@ ${!isHostRecipient && fullManageUrl ? `Manage Appointment:\n${fullManageUrl}\n` 
           ? `Appointment cancellation — ${p.guestName || "Guest"}`
           : "Your Slotbook appointment has been cancelled";
 
+        const cancelAppt = formatAppointmentInTimezone(p.startAt, p.endAt, displayTz);
+
         const text = `
 Slotbook — ${headline}
 
-The appointment for "${p.eventName}" originally scheduled for ${formatDisplayDate(p.startAt, displayTz)} has been cancelled.
+The appointment for "${p.eventName}" originally scheduled for:
+${cancelAppt.dateStr}
+${cancelAppt.timeRangeStr}
+has been cancelled.
 
 Details:
 • Booking Reference: ${bookingRef}
 • Event: ${p.eventName}
 • Host: ${p.hostName}
 • Guest: ${p.guestName}
-• Original Date & Time: ${formatDisplayDate(p.startAt, displayTz)} (${displayTz})
+• Scheduled Time: ${cancelAppt.fullStr}
 • Purpose: ${p.meetingPurpose || "General Appointment"}
 • Cancellation Reason: ${p.cancellationReason || "No reason specified"}
 • Initiated By: ${p.cancelledBy || (isHostRecipient ? "Guest" : "Host")}
@@ -469,8 +512,8 @@ Details:
             <h1 style="color: #0f172a; font-size: 22px; font-weight: 800; margin: 0 0 6px 0;">
               ${headline}
             </h1>
-            <p style="color: #475569; font-size: 14px; margin: 0;">
-              The appointment has been removed from the schedule.
+            <p style="color: #475569; font-size: 14px; margin: 0 0 16px 0;">
+              The appointment originally scheduled for <strong>${cancelAppt.dateStr}</strong> at <strong>${cancelAppt.timeRangeStr}</strong> has been cancelled and removed from the schedule.
             </p>
           </div>
 
@@ -493,8 +536,12 @@ Details:
                 <td style="padding: 6px 0; color: #0f172a;">${p.guestName}</td>
               </tr>
               <tr>
-                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Original Time:</td>
-                <td style="padding: 6px 0; color: #0f172a;">${formatDisplayDate(p.startAt, displayTz)}</td>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Date:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-weight: 700;">${cancelAppt.dateStr}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Time:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-weight: 700;">${cancelAppt.timeRangeStr}</td>
               </tr>
               <tr>
                 <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Cancellation Reason:</td>

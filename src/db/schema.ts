@@ -119,6 +119,7 @@ export const bookings = pgTable(
       .references(() => eventTypes.id, { onDelete: "cascade" }),
     guestName: text("guest_name"),
     guestEmail: text("guest_email"),
+    guestTimezone: text("guest_timezone").default("UTC"),
     meetingPurpose: text("meeting_purpose").notNull().default("General Appointment"),
     startAt: timestamp("start_at", { withTimezone: true }).notNull(),
     endAt: timestamp("end_at", { withTimezone: true }).notNull(),

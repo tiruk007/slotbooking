@@ -5,6 +5,7 @@ export const createHoldSchema = z.object({
   startAt: z.string().datetime({ message: "startAt must be a valid ISO-8601 timestamp" }),
   guestName: z.string().min(1, "Guest name is required").max(100).optional(),
   guestEmail: z.string().email("Invalid email address").optional(),
+  guestTimezone: z.string().optional(),
   meetingPurpose: z.string().min(3, "Meeting purpose must be at least 3 characters").max(1000).optional(),
 });
 
@@ -12,11 +13,13 @@ export const confirmHoldSchema = z.object({
   code: z.string().length(6, "Verification code must be 6 digits").regex(/^\d{6}$/, "Code must be 6 digits").optional(),
   guestName: z.string().min(1, "Guest name is required").max(100).optional(),
   guestEmail: z.string().email("Invalid email address").optional(),
+  guestTimezone: z.string().optional(),
   meetingPurpose: z.string().min(3, "Meeting purpose is required").max(1000).optional(),
 });
 
 export const rescheduleBookingSchema = z.object({
   newStartAt: z.string().datetime({ message: "newStartAt must be a valid ISO-8601 timestamp" }),
+  guestTimezone: z.string().optional(),
 });
 
 export const cancelBookingSchema = z.object({

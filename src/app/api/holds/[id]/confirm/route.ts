@@ -29,6 +29,7 @@ export async function POST(
       holdId: params.id,
       guestName: validated.guestName,
       guestEmail: validated.guestEmail,
+      guestTimezone: validated.guestTimezone,
       meetingPurpose: validated.meetingPurpose,
     });
 

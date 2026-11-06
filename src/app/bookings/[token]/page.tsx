@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -33,8 +33,33 @@ export default function BookingManagementPage() {
   const [showReschedule, setShowReschedule] = useState(false);
   const [availableSlots, setAvailableSlots] = useState<any[]>([]);
   const [loadingSlots, setLoadingSlots] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<string>("");
   const [selectedNewSlot, setSelectedNewSlot] = useState<string>("");
   const [rescheduling, setRescheduling] = useState(false);
+
+  // Group slots by date in guest's timezone
+  const slotsByDate = useMemo(() => {
+    const map = new Map<string, any[]>();
+    for (const slot of availableSlots) {
+      const dateKey = new Date(slot.startAt).toLocaleDateString("en-CA", {
+        timeZone: guestTz,
+      });
+      const list = map.get(dateKey) || [];
+      list.push(slot);
+      map.set(dateKey, list);
+    }
+    return map;
+  }, [availableSlots, guestTz]);
+
+  const availableDates = useMemo(() => {
+    return Array.from(slotsByDate.keys()).sort();
+  }, [slotsByDate]);
+
+  useEffect(() => {
+    if (availableDates.length > 0 && (!selectedDate || !slotsByDate.has(selectedDate))) {
+      setSelectedDate(availableDates[0]);
+    }
+  }, [availableDates, selectedDate, slotsByDate]);
 
   // Cancel state
   const [showCancel, setShowCancel] = useState(false);
@@ -75,9 +100,11 @@ export default function BookingManagementPage() {
   const loadRescheduleSlots = async () => {
     if (!booking) return;
     setLoadingSlots(true);
+    setSelectedNewSlot("");
     try {
+      const hostIdentifier = booking.host.slug || booking.host.email;
       const res = await fetch(
-        `/api/hosts/${encodeURIComponent(booking.host.email)}/events/${booking.event.slug}/slots?tz=${encodeURIComponent(guestTz)}`
+        `/api/hosts/${encodeURIComponent(hostIdentifier)}/events/${booking.event.slug}/slots?tz=${encodeURIComponent(guestTz)}`
       );
       const data = await res.json();
       if (res.ok) {
@@ -93,6 +120,7 @@ export default function BookingManagementPage() {
   const handleOpenReschedule = () => {
     setShowReschedule(true);
     setShowCancel(false);
+    setSelectedNewSlot("");
     loadRescheduleSlots();
   };
 
@@ -106,7 +134,10 @@ export default function BookingManagementPage() {
       const res = await fetch(`/api/bookings/${token}/reschedule`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ newStartAt: selectedNewSlot }),
+        body: JSON.stringify({
+          newStartAt: selectedNewSlot,
+          guestTimezone: guestTz,
+        }),
       });
 
       const data = await res.json();
@@ -301,70 +332,175 @@ export default function BookingManagementPage() {
 
       {/* Reschedule Drawer / Box */}
       {showReschedule && (
-        <div className="bg-white rounded-2xl border border-indigo-200 shadow-md p-6 space-y-5 animate-in fade-in duration-150">
-          <div className="flex items-center justify-between">
-            <h3 className="font-bold text-slate-900 flex items-center gap-2">
-              <RefreshCw className="w-4 h-4 text-indigo-600" />
-              <span>Select New Slot to Reschedule</span>
-            </h3>
-            <button
-              onClick={() => setShowReschedule(false)}
-              className="text-xs text-slate-400 hover:text-slate-600 font-semibold"
-            >
-              Close
-            </button>
+        <div className="bg-white rounded-2xl border border-indigo-200 shadow-lg p-6 sm:p-8 space-y-6 animate-in fade-in duration-150">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-4">
+            <div>
+              <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <RefreshCw className="w-5 h-5 text-indigo-600" />
+                <span>Select New Appointment Time</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Choose a new date and time slot within the host&apos;s booking horizon.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 self-start sm:self-auto">
+              <Globe className="w-3.5 h-3.5 text-slate-400" />
+              <span>Timezone: <strong>{guestTz}</strong></span>
+            </div>
           </div>
 
           {loadingSlots ? (
-            <div className="py-8 text-center text-xs text-slate-500">Loading open slots...</div>
+            <div className="py-12 text-center text-xs text-slate-500 flex flex-col items-center gap-2">
+              <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+              <span>Checking available host openings...</span>
+            </div>
           ) : availableSlots.length === 0 ? (
-            <div className="py-8 text-center text-xs text-slate-500">
-              No open slots available to reschedule to at this moment.
+            <div className="py-10 bg-slate-50 border border-slate-200 rounded-xl text-center text-xs text-slate-500">
+              No open slots available to reschedule to at this moment. Please check back later.
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-60 overflow-y-auto pr-1">
-              {availableSlots.map((slot) => {
-                const isSelected = selectedNewSlot === slot.startAt;
-                const formatted = new Date(slot.startAt).toLocaleString("en-US", {
-                  timeZone: guestTz,
-                  month: "short",
-                  day: "numeric",
-                  hour: "numeric",
-                  minute: "numeric",
-                  hour12: true,
-                });
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Date Selector */}
+              <div className="space-y-3">
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>1. Select Date</span>
+                </span>
+                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                  {availableDates.map((dateStr) => {
+                    const isSelected = selectedDate === dateStr;
+                    const count = (slotsByDate.get(dateStr) || []).length;
+                    const d = new Date(dateStr + "T00:00:00");
+                    const formattedDate = d.toLocaleDateString("en-US", {
+                      weekday: "short",
+                      month: "short",
+                      day: "numeric",
+                    });
 
-                return (
-                  <button
-                    key={slot.startAt}
-                    type="button"
-                    onClick={() => setSelectedNewSlot(slot.startAt)}
-                    className={`p-2.5 border rounded-lg text-xs font-semibold text-center transition ${
-                      isSelected
-                        ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
-                        : "bg-white text-slate-800 border-slate-200 hover:border-indigo-400"
-                    }`}
-                  >
-                    {formatted}
-                  </button>
-                );
-              })}
+                    return (
+                      <button
+                        key={dateStr}
+                        type="button"
+                        onClick={() => {
+                          setSelectedDate(dateStr);
+                          setSelectedNewSlot("");
+                        }}
+                        className={`w-full p-3 rounded-xl border text-left flex items-center justify-between text-xs transition ${
+                          isSelected
+                            ? "bg-indigo-50 border-indigo-600 text-indigo-950 font-bold shadow-xs"
+                            : "bg-white border-slate-200 text-slate-700 hover:border-slate-300 font-medium"
+                        }`}
+                      >
+                        <span>{formattedDate}</span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full ${
+                          isSelected ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-500"
+                        }`}>
+                          {count} {count === 1 ? "slot" : "slots"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Time Slots for Selected Date */}
+              <div className="space-y-3">
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>2. Select Time ({guestTz})</span>
+                </span>
+                {!selectedDate || (slotsByDate.get(selectedDate) || []).length === 0 ? (
+                  <div className="p-8 bg-slate-50 border border-slate-200 rounded-xl text-center text-xs text-slate-500">
+                    Select a date on the left to see available times.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-1">
+                    {(slotsByDate.get(selectedDate) || []).map((slot) => {
+                      const isSelected = selectedNewSlot === slot.startAt;
+                      const timeStr = new Date(slot.startAt).toLocaleTimeString("en-US", {
+                        timeZone: guestTz,
+                        hour: "numeric",
+                        minute: "2-digit",
+                      });
+
+                      return (
+                        <button
+                          key={slot.startAt}
+                          type="button"
+                          onClick={() => setSelectedNewSlot(slot.startAt)}
+                          className={`p-2.5 rounded-xl border text-xs font-bold transition text-center ${
+                            isSelected
+                              ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
+                              : "bg-white text-slate-800 border-slate-200 hover:border-indigo-400"
+                          }`}
+                        >
+                          {timeStr}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
-          <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+          {/* Comparison Review Card */}
+          {selectedNewSlot && (
+            <div className="p-4 bg-indigo-50/60 border border-indigo-100 rounded-2xl space-y-3">
+              <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider block">
+                Appointment Comparison
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-1">
+                  <div className="text-[11px] font-semibold text-slate-400 uppercase">Current Appointment</div>
+                  <div className="font-bold text-slate-700 line-through">
+                    {new Date(booking.startAt).toLocaleString("en-US", {
+                      timeZone: guestTz,
+                      weekday: "short",
+                      month: "short",
+                      day: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                  </div>
+                </div>
+                <div className="p-3 bg-white rounded-xl border border-indigo-300 shadow-xs space-y-1">
+                  <div className="text-[11px] font-bold text-indigo-600 uppercase">New Proposed Time</div>
+                  <div className="font-black text-indigo-950">
+                    {new Date(selectedNewSlot).toLocaleString("en-US", {
+                      timeZone: guestTz,
+                      weekday: "short",
+                      month: "short",
+                      day: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                  </div>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Confirming will atomically release your current appointment slot and reserve the new time. Both you and the host will receive an updated email confirmation.
+              </p>
+            </div>
+          )}
+
+          <div className="flex flex-col-reverse sm:flex-row sm:items-center justify-end gap-3 pt-4 border-t border-slate-100">
             <button
-              onClick={() => setShowReschedule(false)}
-              className="px-4 py-2 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              onClick={() => {
+                setShowReschedule(false);
+                setSelectedNewSlot("");
+              }}
+              className="px-4 py-2.5 border border-slate-300 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 transition"
             >
               Keep Current Time
             </button>
             <button
               disabled={!selectedNewSlot || rescheduling}
               onClick={handleRescheduleSubmit}
-              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition shadow-sm disabled:opacity-50"
+              className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition shadow-xs disabled:opacity-50 flex items-center justify-center gap-1.5"
             >
-              {rescheduling ? "Rescheduling..." : "Confirm Reschedule"}
+              <RefreshCw className={`w-3.5 h-3.5 ${rescheduling ? "animate-spin" : ""}`} />
+              <span>{rescheduling ? "Confirming Reschedule..." : "Confirm Reschedule"}</span>
             </button>
           </div>
         </div>

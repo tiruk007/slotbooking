@@ -31,6 +31,7 @@ export interface CreateHoldParams {
   startAt: string; // ISO
   guestName?: string;
   guestEmail?: string;
+  guestTimezone?: string;
   meetingPurpose?: string;
   idempotencyKey?: string;
   requestPayload?: any;
@@ -41,6 +42,7 @@ export interface ConfirmHoldParams {
   holdId: string;
   guestName?: string;
   guestEmail?: string;
+  guestTimezone?: string;
   meetingPurpose?: string;
   customUrl?: string;
 }
@@ -48,6 +50,7 @@ export interface ConfirmHoldParams {
 export interface RescheduleBookingParams {
   rawToken: string;
   newStartAt: string;
+  guestTimezone?: string;
   customUrl?: string;
 }
 
@@ -167,6 +170,7 @@ export class BookingService {
       startAt,
       guestName,
       guestEmail,
+      guestTimezone,
       meetingPurpose,
       idempotencyKey,
       requestPayload,
@@ -329,13 +333,14 @@ export class BookingService {
       try {
         const bookingRes = await client.query(
           `INSERT INTO bookings 
-           (event_type_id, guest_name, guest_email, meeting_purpose, start_at, end_at, host_local_date, status, hold_expires_at)
-           VALUES ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz, $7::date, 'HELD', clock_timestamp() + interval '5 minutes')
-           RETURNING id, event_type_id, guest_name, guest_email, meeting_purpose, start_at, end_at, host_local_date, status, hold_expires_at, created_at`,
+           (event_type_id, guest_name, guest_email, guest_timezone, meeting_purpose, start_at, end_at, host_local_date, status, hold_expires_at)
+           VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, $8::date, 'HELD', clock_timestamp() + interval '5 minutes')
+           RETURNING id, event_type_id, guest_name, guest_email, guest_timezone, meeting_purpose, start_at, end_at, host_local_date, status, hold_expires_at, created_at`,
           [
             eventTypeId,
             guestName || null,
             normalizedEmail,
+            guestTimezone || "UTC",
             meetingPurpose || "General Appointment",
             startDate.toISOString(),
             endDate.toISOString(),
@@ -426,7 +431,7 @@ export class BookingService {
    * creates Google Meet link if configured, and records outbox notification.
    */
   static async confirmHold(params: ConfirmHoldParams) {
-    const { holdId, guestName, guestEmail, meetingPurpose, customUrl } = params;
+    const { holdId, guestName, guestEmail, guestTimezone, meetingPurpose, customUrl } = params;
     const pool = getPool(customUrl);
 
     const result = await withTransaction(pool, async (client: PoolClient) => {
@@ -545,17 +550,19 @@ export class BookingService {
           `UPDATE bookings
            SET guest_name = $1,
                guest_email = $2,
-               meeting_purpose = $3,
+               guest_timezone = COALESCE($3, guest_timezone),
+               meeting_purpose = $4,
                status = 'CONFIRMED',
                hold_expires_at = NULL,
-               manage_token_hash = $4,
+               manage_token_hash = $5,
                meet_link = NULL,
                updated_at = clock_timestamp()
-           WHERE id = $5
+           WHERE id = $6
            RETURNING *`,
           [
             effectiveGuestName,
             effectiveGuestEmail,
+            guestTimezone || null,
             effectivePurpose,
             tokenHash,
             holdId,
@@ -588,7 +595,8 @@ export class BookingService {
         meetingPurpose: effectivePurpose,
         startAt: updatedBooking.start_at.toISOString(),
         endAt: updatedBooking.end_at.toISOString(),
-        hostTimezone: booking.home_timezone,
+        hostTimezone: booking.home_timezone || "UTC",
+        guestTimezone: updatedBooking.guest_timezone || guestTimezone || "UTC",
         manageUrl,
         meetLink: null,
       };
@@ -652,7 +660,7 @@ export class BookingService {
    * validating duplicate bookings on target date and cross-event buffer integrity.
    */
   static async rescheduleBooking(params: RescheduleBookingParams) {
-    const { rawToken, newStartAt, customUrl } = params;
+    const { rawToken, newStartAt, guestTimezone, customUrl } = params;
     const pool = getPool(customUrl);
     const tokenHash = hashManageToken(rawToken);
 
@@ -810,10 +818,17 @@ export class BookingService {
          SET start_at = $1::timestamptz,
              end_at = $2::timestamptz,
              host_local_date = $3::date,
+             guest_timezone = COALESCE($4, guest_timezone),
              updated_at = clock_timestamp()
-         WHERE id = $4
+         WHERE id = $5
          RETURNING *`,
-        [newStartDate.toISOString(), newEndDate.toISOString(), newHostLocalDate, booking.id]
+        [
+          newStartDate.toISOString(),
+          newEndDate.toISOString(),
+          newHostLocalDate,
+          guestTimezone || null,
+          booking.id,
+        ]
       );
       const updated = updateRes.rows[0];
 
@@ -824,6 +839,7 @@ export class BookingService {
       // 9. Write notifications for GUEST and HOST
       const reschedulePayload = {
         bookingId: booking.id,
+        bookingReference: booking.id,
         eventName: booking.event_name,
         hostName: booking.host_name,
         hostEmail: booking.host_email,
@@ -833,6 +849,8 @@ export class BookingService {
         previousStartAt: booking.start_at.toISOString(),
         newStartAt: updated.start_at.toISOString(),
         newEndAt: updated.end_at.toISOString(),
+        hostTimezone: booking.home_timezone || "UTC",
+        guestTimezone: updated.guest_timezone || guestTimezone || "UTC",
         manageUrl,
         meetLink: null,
       };
@@ -843,7 +861,10 @@ export class BookingService {
         eventType: "BOOKING_RESCHEDULED",
         recipientEmail: booking.guest_email,
         subject: `Rescheduled: ${booking.event_name} with ${booking.host_name}`,
-        payload: reschedulePayload,
+        payload: {
+          ...reschedulePayload,
+          recipientRole: "GUEST",
+        },
       });
 
       await NotificationService.enqueue(client, {
@@ -852,7 +873,10 @@ export class BookingService {
         eventType: "BOOKING_RESCHEDULED",
         recipientEmail: booking.host_email,
         subject: `Rescheduled: ${booking.guest_name} — ${booking.event_name}`,
-        payload: reschedulePayload,
+        payload: {
+          ...reschedulePayload,
+          recipientRole: "HOST",
+        },
       });
 
       return {
@@ -885,7 +909,7 @@ export class BookingService {
 
     const result = await withTransaction(pool, async (client: PoolClient) => {
       const bRes = await client.query(
-        `SELECT b.*, e.name as event_name, h.name as host_name, h.email as host_email
+        `SELECT b.*, e.name as event_name, h.name as host_name, h.email as host_email, h.home_timezone
          FROM bookings b
          JOIN event_types e ON b.event_type_id = e.id
          JOIN hosts h ON e.host_id = h.id
@@ -943,7 +967,8 @@ export class BookingService {
         guestName: booking.guest_name,
         startAt: booking.start_at.toISOString(),
         endAt: booking.end_at ? booking.end_at.toISOString() : undefined,
-        hostTimezone: booking.home_timezone,
+        hostTimezone: booking.home_timezone || "UTC",
+        guestTimezone: booking.guest_timezone || "UTC",
         cancellationReason: effectiveReason,
         cancelledBy: "Guest",
         status: "CANCELLED",
@@ -999,7 +1024,7 @@ export class BookingService {
 
     const result = await withTransaction(pool, async (client: PoolClient) => {
       const bRes = await client.query(
-        `SELECT b.*, e.name as event_name, h.name as host_name, h.email as host_email
+        `SELECT b.*, e.name as event_name, h.name as host_name, h.email as host_email, h.home_timezone
          FROM bookings b
          JOIN event_types e ON b.event_type_id = e.id
          JOIN hosts h ON e.host_id = h.id
@@ -1046,7 +1071,8 @@ export class BookingService {
         guestName: booking.guest_name,
         startAt: booking.start_at.toISOString(),
         endAt: booking.end_at ? booking.end_at.toISOString() : undefined,
-        hostTimezone: booking.home_timezone,
+        hostTimezone: booking.home_timezone || "UTC",
+        guestTimezone: booking.guest_timezone || "UTC",
         cancellationReason: effectiveReason,
         cancelledBy: "Host",
         status: "CANCELLED",
@@ -1101,10 +1127,10 @@ export class BookingService {
     const tokenHash = hashManageToken(rawToken);
 
     const res = await pool.query(
-      `SELECT b.id, b.guest_name, b.guest_email, b.meeting_purpose, b.start_at, b.end_at,
+      `SELECT b.id, b.guest_name, b.guest_email, b.guest_timezone, b.meeting_purpose, b.start_at, b.end_at,
               b.status, b.cancellation_reason, b.meet_link, b.created_at,
               e.id as event_type_id, e.name as event_name, e.slug as event_slug, e.duration_minutes,
-              h.name as host_name, h.email as host_email, h.home_timezone
+              h.name as host_name, h.email as host_email, h.slug as host_slug, h.home_timezone
        FROM bookings b
        JOIN event_types e ON b.event_type_id = e.id
        JOIN hosts h ON e.host_id = h.id
@@ -1121,6 +1147,7 @@ export class BookingService {
       id: row.id,
       guestName: row.guest_name,
       guestEmail: row.guest_email,
+      guestTimezone: row.guest_timezone || "UTC",
       meetingPurpose: row.meeting_purpose,
       startAt: row.start_at.toISOString(),
       endAt: row.end_at.toISOString(),
@@ -1137,6 +1164,7 @@ export class BookingService {
       host: {
         name: row.host_name,
         email: row.host_email,
+        slug: row.host_slug,
         timezone: row.home_timezone,
       },
     };

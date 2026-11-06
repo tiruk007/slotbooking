@@ -15,6 +15,7 @@ export async function POST(request: NextRequest) {
       startAt: validated.startAt,
       guestName: validated.guestName,
       guestEmail: validated.guestEmail,
+      guestTimezone: validated.guestTimezone,
       meetingPurpose: validated.meetingPurpose,
       idempotencyKey,
       requestPayload: rawBody,

@@ -38,12 +38,8 @@ export interface AvailableSlot {
   remainingCapacity: number;
 }
 
-function advanceSlot(current: DateTime, stepMinutes: number, latest: DateTime): DateTime {
-  const next = current.plus({ minutes: stepMinutes });
-  if (next > latest && current < latest) {
-    return latest;
-  }
-  return next;
+function advanceSlot(current: DateTime, stepMinutes: number): DateTime {
+  return current.plus({ minutes: stepMinutes });
 }
 
 /**
@@ -103,8 +99,11 @@ export function calculateAvailableSlots(params: {
   let currentDay = from.setZone(hostTimezone).startOf("day");
   const endDay = to.setZone(hostTimezone).endOf("day");
 
-  // Step interval for slots (e.g. 15 minutes)
-  const stepMinutes = Math.min(eventType.durationMinutes, 15);
+  // Consecutive slot step interval: Duration + BufferBefore + BufferAfter
+  const stepMinutes = Math.max(
+    1,
+    eventType.durationMinutes + (eventType.bufferBefore || 0) + (eventType.bufferAfter || 0)
+  );
 
   while (currentDay <= endDay) {
     const dateStr = currentDay.toISODate(); // "YYYY-MM-DD"
@@ -205,13 +204,13 @@ export function calculateAvailableSlots(params: {
 
         // 1. Authoritative minimum notice check
         if (slotStartUtc < minNoticeTimeUtc) {
-          slotStart = advanceSlot(slotStart, stepMinutes, latestStart);
+          slotStart = advanceSlot(slotStart, stepMinutes);
           continue;
         }
 
         // 2. Authoritative booking horizon check
         if (slotStartUtc > maxHorizonTimeUtc) {
-          slotStart = advanceSlot(slotStart, stepMinutes, latestStart);
+          slotStart = advanceSlot(slotStart, stepMinutes);
           continue;
         }
 
@@ -255,7 +254,7 @@ export function calculateAvailableSlots(params: {
           });
         }
 
-        slotStart = advanceSlot(slotStart, stepMinutes, latestStart);
+        slotStart = advanceSlot(slotStart, stepMinutes);
       }
     }
 

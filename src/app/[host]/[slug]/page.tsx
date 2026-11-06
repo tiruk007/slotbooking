@@ -211,6 +211,7 @@ export default function PublicBookingPage() {
           startAt: selectedSlot.startAt,
           guestName: guestName.trim(),
           guestEmail: guestEmail.trim(),
+          guestTimezone: guestTz,
           meetingPurpose: meetingPurpose.trim(),
         }),
       });
@@ -272,6 +273,7 @@ export default function PublicBookingPage() {
           code: verificationCode.trim(),
           guestName: guestName.trim(),
           guestEmail: guestEmail.trim(),
+          guestTimezone: guestTz,
           meetingPurpose: meetingPurpose.trim(),
         }),
       });

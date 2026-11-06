@@ -156,9 +156,10 @@ export default function HostBookingsPage() {
                       &ldquo;{b.meetingPurpose}&rdquo;
                     </div>
                   )}
-                  {b.cancellationReason && (
-                    <div className="text-red-600">
-                      <strong>Cancellation reason:</strong> {b.cancellationReason}
+                  {b.status === "CANCELLED" && (
+                    <div className="text-xs text-red-600 bg-red-50/50 p-2.5 rounded-lg border border-red-100 space-y-0.5">
+                      <div><strong>Cancelled on:</strong> {b.updatedAt ? new Date(b.updatedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "Recently"}</div>
+                      <div><strong>Reason:</strong> {b.cancellationReason || "No reason provided"}</div>
                     </div>
                   )}
                 </div>

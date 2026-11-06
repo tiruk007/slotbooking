@@ -19,6 +19,12 @@ export default function HostDashboardPage() {
   const [host, setHost] = useState<any>(null);
   const [events, setEvents] = useState<any[]>([]);
   const [bookings, setBookings] = useState<any[]>([]);
+  const [stats, setStats] = useState({
+    upcomingCount: 0,
+    cancelledCount: 0,
+    pastCount: 0,
+    scheduledHours: 0,
+  });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -42,6 +48,9 @@ export default function HostDashboardPage() {
         if (bookingsRes.ok) {
           const d = await bookingsRes.json();
           setBookings(d?.data?.bookings || d?.bookings || []);
+          if (d?.data?.stats) {
+            setStats(d.data.stats);
+          }
         }
       } catch (err) {
         console.error("Failed to load dashboard data:", err);
@@ -62,10 +71,6 @@ export default function HostDashboardPage() {
   }
 
   const publishedCount = events.filter((e) => e.status === "PUBLISHED").length;
-  const totalHours = bookings.reduce((acc, b) => {
-    const diff = (new Date(b.endAt).getTime() - new Date(b.startAt).getTime()) / (1000 * 60 * 60);
-    return acc + diff;
-  }, 0);
 
   return (
     <div className="space-y-8">
@@ -118,9 +123,14 @@ export default function HostDashboardPage() {
             </div>
           </div>
           <div className="mt-4 flex items-baseline gap-2">
-            <span className="text-3xl font-black text-slate-900">{bookings.length}</span>
+            <span className="text-3xl font-black text-slate-900">{stats.upcomingCount}</span>
             <span className="text-xs text-emerald-600 font-semibold">confirmed</span>
           </div>
+          {stats.cancelledCount > 0 && (
+            <div className="mt-1 text-[11px] text-slate-400 font-medium">
+              {stats.cancelledCount} cancelled
+            </div>
+          )}
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs">
@@ -131,7 +141,7 @@ export default function HostDashboardPage() {
             </div>
           </div>
           <div className="mt-4 flex items-baseline gap-2">
-            <span className="text-3xl font-black text-slate-900">{totalHours.toFixed(1)}</span>
+            <span className="text-3xl font-black text-slate-900">{stats.scheduledHours.toFixed(1)}</span>
             <span className="text-xs text-slate-400 font-medium">hours</span>
           </div>
         </div>
@@ -191,25 +201,28 @@ export default function HostDashboardPage() {
             </Link>
           </div>
 
-          {bookings.length === 0 ? (
+          {bookings.filter((b) => b.status === "CONFIRMED" && new Date(b.startAt).getTime() > Date.now()).length === 0 ? (
             <div className="py-8 text-center text-xs text-slate-400">
               No upcoming appointments scheduled.
             </div>
           ) : (
             <div className="divide-y divide-slate-100">
-              {bookings.slice(0, 3).map((b) => (
-                <div key={b.id} className="py-3 flex items-center justify-between">
-                  <div>
-                    <div className="font-bold text-xs text-slate-900">{b.eventName} with {b.guestName}</div>
-                    <div className="text-[11px] text-slate-400">
-                      {new Date(b.startAt).toLocaleDateString()} at {new Date(b.startAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              {bookings
+                .filter((b) => b.status === "CONFIRMED" && new Date(b.startAt).getTime() > Date.now())
+                .slice(0, 3)
+                .map((b) => (
+                  <div key={b.id} className="py-3 flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-xs text-slate-900">{b.eventName} with {b.guestName}</div>
+                      <div className="text-[11px] text-slate-400">
+                        {new Date(b.startAt).toLocaleDateString()} at {new Date(b.startAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </div>
                     </div>
+                    <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[10px] font-bold">
+                      Confirmed
+                    </span>
                   </div>
-                  <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[10px] font-bold">
-                    Confirmed
-                  </span>
-                </div>
-              ))}
+                ))}
             </div>
           )}
         </div>

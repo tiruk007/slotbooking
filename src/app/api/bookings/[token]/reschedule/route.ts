@@ -14,6 +14,7 @@ export async function POST(
     const result = await BookingService.rescheduleBooking({
       rawToken: params.token,
       newStartAt: validated.newStartAt,
+      guestTimezone: validated.guestTimezone,
     });
 
     return apiSuccess(result, 200);
