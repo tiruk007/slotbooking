@@ -368,7 +368,7 @@ export class BookingService {
 
       // 2. Fetch booking with row lock
       const bRes = await client.query(
-        `SELECT b.*, e.name as event_name, e.slug as event_slug, h.name as host_name, h.email as host_email, h.home_timezone
+        `SELECT b.*, e.name as event_name, e.slug as event_slug, e.host_id, h.name as host_name, h.email as host_email, h.home_timezone
          FROM bookings b
          JOIN event_types e ON b.event_type_id = e.id
          JOIN hosts h ON e.host_id = h.id
@@ -458,10 +458,12 @@ export class BookingService {
       const rawToken = crypto.randomBytes(32).toString("hex");
       const tokenHash = hashManageToken(rawToken);
 
-      // 6. Attempt Google Meet link generation if configured
+      // 6. Attempt Google Meet link generation if configured for this specific host
       let meetLink: string | null = null;
+      let calendarEventId: string | null = null;
       try {
-        const meetRes = await MeetService.createMeetLink({
+        const meetRes = await MeetService.createMeetLinkForHost({
+          hostId: booking.host_id,
           title: `${booking.event_name} — ${effectiveGuestName} & ${booking.host_name}`,
           startAt: booking.start_at.toISOString(),
           endAt: booking.end_at.toISOString(),
@@ -470,8 +472,10 @@ export class BookingService {
           meetingPurpose: effectivePurpose,
         });
         meetLink = meetRes.meetLink;
+        calendarEventId = meetRes.eventId || null;
       } catch {
         meetLink = null;
+        calendarEventId = null;
       }
 
       // 7. Update booking to CONFIRMED and clear hold expiry
@@ -486,8 +490,9 @@ export class BookingService {
                hold_expires_at = NULL,
                manage_token_hash = $4,
                meet_link = $5,
+               google_calendar_event_id = $6,
                updated_at = clock_timestamp()
-           WHERE id = $6
+           WHERE id = $7
            RETURNING *`,
           [
             effectiveGuestName,
@@ -495,6 +500,7 @@ export class BookingService {
             effectivePurpose,
             tokenHash,
             meetLink,
+            calendarEventId,
             holdId,
           ]
         );
@@ -522,7 +528,7 @@ export class BookingService {
         startAt: updatedBooking.start_at.toISOString(),
         endAt: updatedBooking.end_at.toISOString(),
         hostTimezone: booking.home_timezone,
-        manageUrl: `/bookings/${rawToken}`,
+        manageUrl: `/booking/${rawToken}`,
         meetLink,
       };
 
@@ -553,7 +559,7 @@ export class BookingService {
         guestEmail: updatedBooking.guest_email,
         meetingPurpose: updatedBooking.meeting_purpose,
         manageToken: rawToken,
-        manageUrl: `/bookings/${rawToken}`,
+        manageUrl: `/booking/${rawToken}`,
         meetLink: updatedBooking.meet_link,
       };
     });

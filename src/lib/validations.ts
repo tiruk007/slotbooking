@@ -32,6 +32,9 @@ export const slotsQuerySchema = z.object({
 export const eventTypeSchema = z.object({
   name: z.string().min(1).max(100),
   slug: z.string().min(1).max(50).regex(/^[a-z0-9-]+$/, "Slug must only contain lowercase letters, numbers, and hyphens"),
+  description: z.string().max(500).optional().default(""),
+  category: z.string().max(50).optional().default("One-on-One"),
+  status: z.enum(["PUBLISHED", "DRAFT", "INACTIVE"]).optional().default("PUBLISHED"),
   durationMinutes: z.number().int().min(15).max(120),
   capacity: z.number().int().min(1).default(1),
   bufferBefore: z.number().int().min(0).default(0),

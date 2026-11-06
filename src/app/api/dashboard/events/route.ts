@@ -17,13 +17,14 @@ export async function GET() {
 
     const pool = getPool();
     const res = await pool.query(
-      `SELECT id, name, slug, duration_minutes as "durationMinutes", capacity, 
+      `SELECT id, name, slug, description, category, status,
+              duration_minutes as "durationMinutes", capacity, 
               buffer_before as "bufferBefore", buffer_after as "bufferAfter", 
               minimum_notice_minutes as "minimumNoticeMinutes", 
               booking_horizon_days as "bookingHorizonDays", created_at as "createdAt"
        FROM event_types
        WHERE host_id = $1
-       ORDER BY created_at ASC`,
+       ORDER BY created_at DESC`,
       [session.id]
     );
 
@@ -55,9 +56,9 @@ export async function POST(request: NextRequest) {
 
     const res = await pool.query(
       `INSERT INTO event_types 
-       (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after, minimum_notice_minutes, booking_horizon_days)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING id, name, slug, duration_minutes as "durationMinutes", capacity, 
+       (host_id, name, slug, description, category, status, duration_minutes, capacity, buffer_before, buffer_after, minimum_notice_minutes, booking_horizon_days)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING id, name, slug, description, category, status, duration_minutes as "durationMinutes", capacity, 
                  buffer_before as "bufferBefore", buffer_after as "bufferAfter", 
                  minimum_notice_minutes as "minimumNoticeMinutes", 
                  booking_horizon_days as "bookingHorizonDays", created_at as "createdAt"`,
@@ -65,6 +66,9 @@ export async function POST(request: NextRequest) {
         session.id,
         validated.name,
         validated.slug,
+        validated.description || "",
+        validated.category || "One-on-One",
+        validated.status || "PUBLISHED",
         validated.durationMinutes,
         validated.capacity,
         validated.bufferBefore,

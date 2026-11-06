@@ -26,11 +26,11 @@ export async function GET(
 
     const pool = getPool();
 
-    // 1. Fetch host (by email, id, or case-insensitive email)
+    // 1. Fetch host (by slug, email, id, or case-insensitive email)
     const hostRes = await pool.query(
-      `SELECT id, name, email, home_timezone 
+      `SELECT id, name, email, slug, home_timezone 
        FROM hosts 
-       WHERE email = $1 OR id::text = $1 OR LOWER(email) = LOWER($1)
+       WHERE slug = $1 OR email = $1 OR id::text = $1 OR LOWER(email) = LOWER($1)
        LIMIT 1`,
       [decodeURIComponent(hostParam)]
     );

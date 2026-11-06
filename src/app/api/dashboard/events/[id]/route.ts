@@ -6,6 +6,40 @@ import { NotificationService } from "@/lib/notification-service";
 import { apiSuccess, apiError } from "@/lib/api-utils";
 import { AppError } from "@/lib/booking-service";
 
+export const dynamic = "force-dynamic";
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getSession();
+    if (!session) {
+      throw new AppError("UNAUTHORIZED", 401, "Not authenticated");
+    }
+
+    const pool = getPool();
+    const res = await pool.query(
+      `SELECT id, name, slug, description, category, status,
+              duration_minutes as "durationMinutes", capacity, 
+              buffer_before as "bufferBefore", buffer_after as "bufferAfter", 
+              minimum_notice_minutes as "minimumNoticeMinutes", 
+              booking_horizon_days as "bookingHorizonDays", created_at as "createdAt"
+       FROM event_types
+       WHERE id = $1 AND host_id = $2`,
+      [params.id, session.id]
+    );
+
+    if (res.rows.length === 0) {
+      throw new AppError("NOT_FOUND", 404, "Event type not found");
+    }
+
+    return apiSuccess({ eventType: res.rows[0] });
+  } catch (err) {
+    return apiError(err);
+  }
+}
+
 export async function PUT(
   request: NextRequest,
   { params }: { params: { id: string } }
@@ -42,20 +76,27 @@ export async function PUT(
       `UPDATE event_types
        SET name = $1,
            slug = $2,
-           duration_minutes = $3,
-           capacity = $4,
-           buffer_before = $5,
-           buffer_after = $6,
-           minimum_notice_minutes = $7,
-           booking_horizon_days = $8
-       WHERE id = $9 AND host_id = $10
-       RETURNING id, name, slug, duration_minutes as "durationMinutes", capacity, 
+           description = $3,
+           category = $4,
+           status = $5,
+           duration_minutes = $6,
+           capacity = $7,
+           buffer_before = $8,
+           buffer_after = $9,
+           minimum_notice_minutes = $10,
+           booking_horizon_days = $11
+       WHERE id = $12 AND host_id = $13
+       RETURNING id, name, slug, description, category, status,
+                 duration_minutes as "durationMinutes", capacity, 
                  buffer_before as "bufferBefore", buffer_after as "bufferAfter", 
                  minimum_notice_minutes as "minimumNoticeMinutes", 
                  booking_horizon_days as "bookingHorizonDays", created_at as "createdAt"`,
       [
         validated.name,
         validated.slug,
+        validated.description || "",
+        validated.category || "One-on-One",
+        validated.status || "PUBLISHED",
         validated.durationMinutes,
         validated.capacity,
         validated.bufferBefore,

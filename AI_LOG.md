@@ -109,7 +109,52 @@ During implementation and test suite verification, several issues were identifie
 
 ---
 
-## 5. What Was Tested Independently
+## 6. Final Product Workflow Correction & Google Isolation
+
+### Root Causes Identified
+1. **Default Events on Host Registration**:
+   - `src/app/api/auth/register/verify/route.ts` executed an unconditional SQL INSERT into `event_types` inserting "30 Min Appointment", "1 Hr Appointment", and "Group Discussion".
+   - *Fix*: Removed automatic event insertion. Host registration now strictly provisions the host profile and default availability rules.
+
+2. **Irrelevant / Stale Test Emails**:
+   - Legacy test rows remained in `notification_outbox` with status `PENDING`, causing `processOutbox()` to poll and send stale notifications.
+   - *Fix*: Purged stale notifications in migration `0002_workflow_and_google_isolation.sql`, stopped creating fake bookings during registration, and restricted seed execution to uninitialized databases.
+
+3. **Google Meet & Calendar Integration Failure**:
+   - Previous implementation attempted to read a single server-wide environment variable (`GOOGLE_REFRESH_TOKEN`), which was empty. The `hosts` table lacked columns for individual Google OAuth tokens.
+   - *Fix*: Created migration `0002_workflow_and_google_isolation.sql` adding `google_refresh_token`, `google_access_token`, `google_token_expiry`, `google_email`, and `google_connected_at` to `hosts`. Built host-authenticated Google OAuth flow with CSRF protection, `/host/settings/integrations` management UI, and updated `MeetService.createMeetLinkForHost` to mint Meet links using the host's specific tokens, falling back to null safely when unconnected.
+
+4. **Public Event Discovery Gap**:
+   - Public visitors had no way to explore published events across verified hosts. Homepage was hardcoded to `alex@slotbook.dev`.
+   - *Fix*: Added dynamic PostgreSQL queries on the homepage for the latest 3 published events, created `/events` for public discovery, `/events/[slug]` for event details and host selection, and `/book/[host-slug]/[event-slug]` for guest booking.
+
+### Two Completely Separate Experiences Built
+- **Public Website**:
+  - `/` (Dynamic Homepage querying live PostgreSQL events)
+  - `/events` (Public event catalog with category filtering)
+  - `/events/[slug]` (Event overview & verified host selector)
+  - `/book/[host]/[slug]` (Guest booking page)
+  - `/booking/[token]` (Private guest booking management)
+  - `/become-a-host` (Host registration landing page)
+  - Public navbar: "Hosts Login" opens `/host/login` in a new tab (`target="_blank"`).
+- **Private Host Portal**:
+  - `/host/login`, `/host/signup`, `/host/verify-otp` (Passwordless OTP authentication)
+  - `/host/dashboard` (Host overview and KPIs)
+  - `/host/events`, `/host/events/new`, `/host/events/[id]/edit` (Host event CRUD with category and publish status)
+  - `/host/availability` (Weekly rules and date overrides with conflict modal)
+  - `/host/bookings` (Filterable bookings list with cancellation modal)
+  - `/host/settings` (Profile, timezone, and account deletion)
+  - `/host/settings/integrations` (Per-host Google Calendar connection card)
+
+### Comprehensive Verification Suite
+- Created `tests/workflow.test.ts` implementing tests for all 20 requirements in Section 12.
+- Verified all 39 tests across 4 test suites pass against a live PostgreSQL database:
+  - `tests/workflow.test.ts` (15 tests passing)
+  - `tests/transformation.test.ts` (14 tests passing)
+  - `tests/concurrency.test.ts` (9 tests passing)
+  - `tests/api.test.ts` (1 test passing)
+- Verified `npm run build` succeeds cleanly across all 27 static and dynamic routes.
+
 
 1. **Concurrency and Exclusion (24 Automated Tests Passed)**:
    - 20 concurrent requests against a capacity = 1 slot: exactly 1 succeeded, 19 failed with HTTP 409.

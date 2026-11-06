@@ -8,11 +8,23 @@ The platform provides a seamless experience for hosts and guests with passwordle
 
 ## 1. Product Overview
 
-Slotbook connects hosts and guests effortlessly:
-1. **Public Homepage**: Clear product introduction, how it works, available appointment types, benefits for hosts and guests, and direct calls to action.
-2. **Hosts Portal**: Passwordless email OTP registration, instant login via verification code, and an intuitive dashboard to manage availability, date overrides, appointment types, upcoming bookings, and account settings.
-3. **Guest Booking Experience**: Frictionless booking without an account. Guests select a convenient slot, enter their contact details and meeting purpose, verify their email with a 6-digit code, and instantly secure their appointment.
-4. **Private Booking Management**: Guests receive a private, secure management URL (`/bookings/{token}`) powered by SHA-256 hashed cryptographic tokens, allowing them to reschedule or cancel anytime.
+Slotbook connects hosts and guests effortlessly across two completely separate application experiences:
+
+### A. Public Website
+1. **Homepage (`/`)**: Clear product introduction, how it works, live showcase of the latest published appointment types from verified hosts, benefits for hosts and guests, and direct calls to action.
+2. **Public Event Discovery (`/events`)**: Discover all published appointment types across hosts with category filtering and instant booking links.
+3. **Event Details & Host Selection (`/events/[event-slug]`)**: View comprehensive event details, duration, capacity, buffers, and select among verified hosts offering this event.
+4. **Guest Booking Page (`/book/[host-slug]/[event-slug]`)**: Frictionless booking directly on the host's booking page. Guests select an available slot, enter their contact details and meeting purpose, verify their email with a 6-digit code, and instantly secure their appointment.
+5. **Private Guest Booking Management (`/booking/[token]`)**: Guests receive a private, secure management URL powered by SHA-256 hashed cryptographic tokens, allowing them to reschedule or cancel anytime without logging in.
+6. **Host Registration Introduction (`/become-a-host`)**: Overview of host features with direct call to action to sign up.
+
+### B. Private Host Portal
+1. **Authentication (`/host/login`, `/host/signup`, `/host/verify-otp`)**: Dedicated host auth flow with passwordless email OTP. New registration creates **only** the host account and default schedule settings—zero automatic dummy events, zero fake bookings, and zero fake notifications.
+2. **Host Dashboard (`/host/dashboard`)**: Dedicated overview showing key statistics, upcoming bookings, and quick action cards.
+3. **My Events (`/host/events`, `/host/events/new`, `/host/events/[id]/edit`)**: Complete event management with categories, publish status (`PUBLISHED`, `DRAFT`, `INACTIVE`), durations, capacity, and buffers.
+4. **Availability & Overrides (`/host/availability`)**: Weekly working hours plus specific date overrides with conflict detection.
+5. **Bookings (`/host/bookings`)**: Real-time filterable bookings list with cancellation controls.
+6. **Settings & Integrations (`/host/settings`, `/host/settings/integrations`)**: Profile, timezone configuration, account deletion with OTP, and dedicated per-host Google Calendar OAuth integration.
 
 ---
 
@@ -20,6 +32,10 @@ Slotbook connects hosts and guests effortlessly:
 
 | Feature | Description | Implementation |
 |---|---|---|
+| **Separate Experiences** | Isolated Public vs Host | Clean separation of layouts, navigation guards, and session state. Public navbar "Hosts Login" opens host portal in a new tab. |
+| **Clean Host Registration** | Zero Dummy Events | Registering as a host creates strictly the host profile and default schedule settings. Zero fake bookings, zero dummy events. |
+| **Per-Host Google OAuth** | Personal Google Meet | Hosts connect their personal Google account from `/host/settings/integrations`. Stored encrypted/hashed per host, generating real Google Meet links on confirmation. |
+| **Public Discovery** | Real PostgreSQL Events | Homepage queries the latest 3 published events dynamically; `/events` enables searching published events. |
 | **Host Authentication** | Passwordless Email OTP | 6-digit cryptographically secure OTP, SHA-256 hash storage, 5-minute expiry, 30s resend cooldown, 5 attempt maximum. |
 | **Guest Verification** | Mandatory Email Verification | 6-digit OTP delivered via email before final booking confirmation. Stale holds auto-expire after 5 minutes. |
 | **Concurrency & Double-Booking Protection** | Zero Double-Bookings | PostgreSQL `btree_gist` exclusion constraints for 1-on-1 bookings and serialized `SELECT ... FOR UPDATE` row locks for group capacity. |
@@ -27,7 +43,7 @@ Slotbook connects hosts and guests effortlessly:
 | **Daily Duplicate Protection** | 1 Active Booking / Day | Enforces at most one active booking (`HELD` or `CONFIRMED`) per guest email, per event type, per host-local calendar day via PostgreSQL partial unique index. |
 | **Availability & Overrides** | Dynamic Scheduling | Weekly availability windows + date overrides. Marking a day off immediately blocks slots; host is warned if day off conflicts with confirmed bookings. |
 | **Email & Outbox System** | Transactional Delivery | Nodemailer integration with Gmail SMTP (`smtp.gmail.com:465`) backed by a PostgreSQL transactional outbox tracking 8 domain events. |
-| **Video Conferencing** | Google Meet Integration | Generates real Google Meet links when OAuth credentials are provided; gracefully provides clean meeting details without fabricated URLs. |
+
 
 ---
 
@@ -216,6 +232,16 @@ npm test
 ```
 
 ### Test Suites Included:
+- **`tests/workflow.test.ts`**:
+  - Tests all 20 requirements from the Final Product Workflow specification.
+  - Zero default events, fake bookings, or fake notifications on host signup.
+  - Separate host portal routing and login redirect.
+  - Per-host Google Calendar OAuth and Google Meet link generation with fallback.
+  - Multi-host isolation (hosts cannot see or modify other hosts' events/bookings).
+  - Public event discovery API and guest booking lifecycle via `/book/[host-slug]/[event-slug]`.
+  - Dynamic homepage queries (handles 3, 2, 1, or 0 published events gracefully).
+  - Private guest booking management via `/booking/[token]`.
+  - Database schema integrity: partial unique index, GiST exclusion constraints, and outbox isolation.
 - **`tests/concurrency.test.ts`**:
   - Capacity = 1 exclusion: 20 simultaneous concurrent requests &rarr; exactly 1 succeeds, 19 fail with HTTP 409.
   - Capacity > 1 locking: 20 simultaneous requests for capacity = 3 &rarr; exactly 3 succeed, 17 fail with HTTP 409.

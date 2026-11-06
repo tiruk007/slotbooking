@@ -21,43 +21,35 @@ export async function seed(customUrl?: string) {
       return;
     }
 
-    // 1. Create initial host (passwordless OTP ready)
+    // 1. Create demo host for development environment
     const hostRes = await client.query(
-      `INSERT INTO hosts (name, email, password_hash, home_timezone, status)
-       VALUES ($1, $2, NULL, $3, 'ACTIVE')
-       RETURNING id, name, email, home_timezone`,
-      ["Alex Chen", "alex@slotbook.dev", "Asia/Kolkata"]
+      `INSERT INTO hosts (name, email, slug, password_hash, home_timezone, status)
+       VALUES ($1, $2, $3, NULL, $4, 'ACTIVE')
+       RETURNING id, name, email, slug, home_timezone`,
+      ["Alex Chen", "alex@slotbook.dev", "alex-chen", "Asia/Kolkata"]
     );
     const hostId = hostRes.rows[0].id;
-    console.log(`✓ Seeded Host: ${hostRes.rows[0].name} (${hostRes.rows[0].email})`);
+    console.log(`✓ Seeded Demo Host: ${hostRes.rows[0].name} (${hostRes.rows[0].email})`);
 
-    // 2. Create Event Types with the updated commercial names
+    // 2. Create the two demo event types required for the assignment demo
     // Event 1: 30 Min Appointment
     await client.query(
       `INSERT INTO event_types 
-       (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after, minimum_notice_minutes, booking_horizon_days)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [hostId, "30 Min Appointment", "30-min-appointment", 30, 1, 10, 10, 60, 30]
+       (host_id, name, slug, description, category, status, duration_minutes, capacity, buffer_before, buffer_after, minimum_notice_minutes, booking_horizon_days)
+       VALUES ($1, $2, $3, $4, $5, 'PUBLISHED', $6, $7, $8, $9, $10, $11)`,
+      [hostId, "30 Min Appointment", "30-min-appointment", "Quick introductory meeting or check-in session.", "One-on-One", 30, 1, 10, 10, 60, 30]
     );
 
     // Event 2: 1 Hr Appointment
     await client.query(
       `INSERT INTO event_types 
-       (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after, minimum_notice_minutes, booking_horizon_days)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [hostId, "1 Hr Appointment", "1-hr-appointment", 60, 1, 15, 15, 120, 60]
+       (host_id, name, slug, description, category, status, duration_minutes, capacity, buffer_before, buffer_after, minimum_notice_minutes, booking_horizon_days)
+       VALUES ($1, $2, $3, $4, $5, 'PUBLISHED', $6, $7, $8, $9, $10, $11)`,
+      [hostId, "1 Hr Appointment", "1-hr-appointment", "Comprehensive consultation, technical design review, or deep-dive mentorship.", "One-on-One", 60, 1, 15, 15, 120, 60]
     );
+    console.log("✓ Seeded 2 Demo Event Types (30 Min Appointment, 1 Hr Appointment)");
 
-    // Event 3: Group Discussion (capacity 4)
-    await client.query(
-      `INSERT INTO event_types 
-       (host_id, name, slug, duration_minutes, capacity, buffer_before, buffer_after, minimum_notice_minutes, booking_horizon_days)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [hostId, "Group Discussion", "group-discussion", 45, 4, 10, 10, 180, 30]
-    );
-    console.log("✓ Seeded Customer-Facing Event Types (30 Min Appointment, 1 Hr Appointment, Group Discussion)");
-
-    // 3. Weekly Availability (Monday - Friday, 2 windows: 09:00-12:00 and 13:00-17:00)
+    // 3. Weekly Availability (Monday - Friday, 09:00-12:00 and 13:00-17:00)
     for (let weekday = 1; weekday <= 5; weekday++) {
       await client.query(
         `INSERT INTO availability_rules (host_id, weekday, start_time, end_time)
@@ -67,17 +59,7 @@ export async function seed(customUrl?: string) {
     }
     console.log("✓ Seeded Weekly Availability Rules (Mon-Fri 09:00-12:00, 13:00-17:00)");
 
-    // 4. Sample Date Override (e.g. Next month holiday)
-    const futureDate = new Date();
-    futureDate.setDate(futureDate.getDate() + 14);
-    const dateStr = futureDate.toISOString().split("T")[0];
-    await client.query(
-      `INSERT INTO date_overrides (host_id, override_date, is_available)
-       VALUES ($1, $2, $3)`,
-      [hostId, dateStr, false]
-    );
-    console.log(`✓ Seeded Date Override (${dateStr} marked unavailable)`);
-
+    // Note: No fake bookings or fake notifications are seeded.
     await client.query("COMMIT");
     console.log("✓ Database seeding completed successfully.");
   } catch (error) {

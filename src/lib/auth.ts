@@ -47,6 +47,19 @@ export async function getSession(): Promise<HostSession | null> {
   return verifySessionToken(token);
 }
 
+export async function getSessionFromRequest(request?: Request): Promise<HostSession | null> {
+  if (request) {
+    const cookieHeader = request.headers.get("cookie");
+    if (cookieHeader) {
+      const match = cookieHeader.match(new RegExp(`(^|;\\s*)${SESSION_COOKIE_NAME}=([^;]*)`));
+      if (match && match[2]) {
+        return verifySessionToken(match[2]);
+      }
+    }
+  }
+  return getSession();
+}
+
 export async function setSessionCookie(host: HostSession): Promise<string> {
   const token = await createSessionToken(host);
   const cookieStore = cookies();

@@ -25,9 +25,15 @@ export const hosts = pgTable("hosts", {
   id: uuid("id").defaultRandom().primaryKey(),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
+  slug: text("slug").unique(),
   passwordHash: text("password_hash"),
   homeTimezone: text("home_timezone").notNull().default("UTC"),
   status: text("status").notNull().default("ACTIVE"),
+  googleRefreshToken: text("google_refresh_token"),
+  googleAccessToken: text("google_access_token"),
+  googleTokenExpiry: timestamp("google_token_expiry", { withTimezone: true }),
+  googleEmail: text("google_email"),
+  googleConnectedAt: timestamp("google_connected_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -40,6 +46,9 @@ export const eventTypes = pgTable(
       .references(() => hosts.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     slug: text("slug").notNull(),
+    description: text("description"),
+    category: text("category").notNull().default("One-on-One"),
+    status: text("status").notNull().default("PUBLISHED"),
     durationMinutes: integer("duration_minutes").notNull(), // 15..120
     capacity: integer("capacity").notNull().default(1),
     bufferBefore: integer("buffer_before").notNull().default(0),
@@ -106,6 +115,7 @@ export const bookings = pgTable(
     cancellationReason: text("cancellation_reason"),
     manageTokenHash: text("manage_token_hash").unique(),
     meetLink: text("meet_link"),
+    googleCalendarEventId: text("google_calendar_event_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
