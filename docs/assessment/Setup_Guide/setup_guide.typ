@@ -133,7 +133,39 @@ cd slotbooking
 
 ---
 
-= 5. Environment Configuration
+= 5. PostgreSQL Database Setup (Two Supported Paths)
+
+Slotbook requires PostgreSQL 15+ with the `btree_gist` extension enabled for kernel-level concurrency exclusion.
+
+== Path A (Recommended): Automated Containerized PostgreSQL (Zero Host Install)
+If you are using Docker Desktop, *you do NOT need to install or configure PostgreSQL manually on Windows*:
+- Docker Compose automatically pulls the official `postgres:16-alpine` image.
+- It automatically creates the default database (`slotbook`), sets credentials (`postgres:postgres`), and mounts a named volume (`pgdata`).
+- The startup entrypoint script automatically preloads the `btree_gist` extension, executes all migrations (`npm run db:migrate`), and runs seeds (`npm run db:seed`).
+- *Host action required*: None! Proceed directly to Section 6.
+
+== Path B (Alternative): Native Local PostgreSQL Installation (Running without Docker)
+If running natively on your host machine via Node.js (`npm run dev`):
+1. Install PostgreSQL 16 on Windows via EnterpriseDB installer, setting superuser password to `postgres` on port `5432`.
+2. In `psql` or pgAdmin, execute:
+  ```sql
+  CREATE DATABASE slotbook;
+  CREATE DATABASE slotbook_test;
+  \c slotbook;
+  CREATE EXTENSION IF NOT EXISTS btree_gist;
+  \c slotbook_test;
+  CREATE EXTENSION IF NOT EXISTS btree_gist;
+  ```
+3. Run migrations and seed data:
+  ```bash
+  npm install
+  npm run db:migrate
+  npm run db:seed
+  ```
+
+---
+
+= 6. How to Obtain & Configure Environment Variables
 
 The repository includes a ready-to-run `.env.example` template with production-grade local defaults.
 
@@ -154,13 +186,35 @@ Create your local `.env` file:
   stroke: 0.5pt + rgb("#cbd5e1"),
   inset: 6pt,
   fill: (col, row) => if row == 0 { rgb("#f1f5f9") } else { none },
-  [*Variable*], [*Default Value*], [*Description*],
-  [`PORT`], [`3000`], [Port on which Next.js web application is exposed.],
-  [`DATABASE_URL`], [`postgresql://slotbook_user:...@slotbook-db:5432/...`], [Points to the containerized PostgreSQL database.],
-  [`SESSION_SECRET`], [`slotbook_super_secret_session_key_min_32_chars`], [Cryptographic encryption key for host session cookies.],
-  [`NEXT_PUBLIC_APP_URL`], [`http://localhost:3000`], [Base URL used for email links and host calendar URLs.],
-  [`SMTP_HOST` / `SMTP_PORT`], [`smtp.gmail.com` / `587`], [Outgoing email host & port (optional for local mock mode).]
+  [*Variable*], [*Default Value*], [*Where to Obtain / Description*],
+  [`DATABASE_URL`], [`postgresql://postgres:postgres@localhost:5432/slotbook`], [Main PostgreSQL connection string. In Docker, overridden internally to `postgres` container.],
+  [`TEST_DATABASE_URL`], [`postgresql://postgres:postgres@localhost:5432/slotbook_test`], [Test database connection string used when running `npm test`.],
+  [`APP_BASE_URL`], [`http://localhost:3000`], [Application base URL for self-service guest management links.],
+  [`NEXT_PUBLIC_APP_URL`], [`http://localhost:3000`], [Public client URL matching `APP_BASE_URL`.],
+  [`SESSION_SECRET`], [`slotbook_production_secure_secret_key...`], [Cryptographic secret key for session cookies. See Step 6.1 below.],
+  [`GMAIL_USER`], [`your_email@gmail.com`], [Outgoing SMTP Gmail account. See Step 6.2 below.],
+  [`GMAIL_APP_PASSWORD`], [`your_16_character_app_password`], [Google App Password (16 chars). See Step 6.2 below.],
+  [`MAIL_FROM`], [`your_email@gmail.com`], [Email sender address, matches `GMAIL_USER`.]
 )
+
+== Step 6.1 — How to Generate `SESSION_SECRET`
+Generate a cryptographically secure 32-byte secret in any terminal:
+```bash
+# In Git Bash / WSL / Linux:
+openssl rand -base64 32
+
+# In Windows PowerShell / Node:
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+== Step 6.2 — How to Obtain Google Gmail SMTP Credentials
+Slotbook uses Google's secure SMTP relay. Google does not accept standard account passwords; you must generate an App Password:
+1. Log into your Google Account at https://myaccount.google.com.
+2. Under *Security*, ensure *2-Step Verification* is active.
+3. Visit the App Passwords portal: https://myaccount.google.com/apppasswords.
+4. Name the application `Slotbook` and click *Create*.
+5. Copy the 16-character code (e.g. `abcd efgh ijkl mnop`).
+6. Set `GMAIL_USER=your_email@gmail.com` and `GMAIL_APP_PASSWORD=abcdefghijklmnop` in `.env`.
 
 #rect(
   width: 100%,
@@ -169,14 +223,14 @@ Create your local `.env` file:
   radius: 6pt,
   inset: 8pt,
   [
-    #text(9pt, weight: "bold", fill: rgb("#0369a1"))[Email Notification Note:]\
-    #text(8.5pt)[For local reviewer evaluation, live SMTP credentials are completely optional. The built-in Transactional Outbox stages notifications into PostgreSQL and logs deliveries cleanly without crashing or failing bookings.]
+    #text(9pt, weight: "bold", fill: rgb("#0369a1"))[Local Mock Mode (No Email Setup Required for Reviewers):]\
+    #text(8.5pt)[If you do not wish to configure a real Gmail account, leave `GMAIL_USER` and `GMAIL_APP_PASSWORD` with default placeholders. The Transactional Outbox stages notifications into PostgreSQL and logs delivery simulations to the terminal. OTP codes are printed directly to the console (`[OTP Service] Code generated: 123456`), allowing 100% of booking and login flows to be verified without real emails.]
   ]
 )
 
 ---
 
-= 6. Single-Command Launch via Docker Compose
+= 7. Single-Command Launch via Docker Compose
 
 In the root of the repository, execute:
 
@@ -185,10 +239,10 @@ docker compose up --build
 ```
 
 == Automated Self-Bootstrapping Sequence
-1. *PostgreSQL 16 Engine (`slotbook-db`)*:
+1. *PostgreSQL 16 Engine (`slotbook-postgres`)*:
   - Initializes database cluster and loads the `btree_gist` extension.
-  - Mounts a named persistent volume (`postgres_data`) so data survives restarts.
-  - Activates health check: `pg_isready -U slotbook_user -d slotbook_db`.
+  - Mounts a named persistent volume (`pgdata`) so data survives restarts.
+  - Activates health check: `pg_isready -U postgres -d slotbook`.
 2. *Next.js 14 Application (`slotbook-app`)*:
   - Multi-stage Dockerfile compiles TypeScript and bundles production assets.
   - Executes `docker-entrypoint.sh`:
@@ -206,15 +260,15 @@ the application is fully operational!
 
 ---
 
-= 7. Step-by-Step Verification & Testing Walkthrough
+= 8. Step-by-Step Verification & Testing Walkthrough
 
 Follow these steps in Google Chrome or any browser to test all core capabilities:
 
-== Test 7.1 — System Health Check
+== Test 8.1 — System Health Check
 - Open: `http://localhost:3000/api/health`
 - Confirms status `200 OK` with database connection verified.
 
-== Test 7.2 — Public Customer Booking Experience
+== Test 8.2 — Public Customer Booking Experience
 1. Navigate to the seeded host booking page:  
    `http://localhost:3000/book/tirumalesh/30-minutes`
 2. *Select a Date*: Click any available calendar date.
@@ -224,7 +278,7 @@ Follow these steps in Google Chrome or any browser to test all core capabilities
 6. *Verify OTP*: Enter the 6-digit OTP (displayed in console or test sandbox `123456`).
 7. *Confirmation*: Redirects to confirmation screen with appointment details and reschedule/cancel links.
 
-== Test 7.3 — Host Private Portal & Availability Management
+== Test 8.3 — Host Private Portal & Availability Management
 1. Navigate to Host Login: `http://localhost:3000/host/login`
 2. Enter the seeded host credentials:
   - *Email*: `host@slotbook.internal` (or `tirumaleshkommavarapu@gmail.com`)
@@ -233,7 +287,7 @@ Follow these steps in Google Chrome or any browser to test all core capabilities
 4. *Availability Tab*: View weekly recurring rules, add a date override holiday, and click *"Save Weekly Rules"*.
 5. *Bookings Tab*: Inspect upcoming, past, and cancelled appointments. Cancel a booking and observe immediate state sync.
 
-== Test 7.4 — Run the Automated Test Suite (71 Tests)
+== Test 8.4 — Run the Automated Test Suite (71 Tests)
 Verify that all 71 unit, integration, and concurrency tests pass against the live PostgreSQL container:
 
 ```bash
@@ -250,9 +304,9 @@ Ran all test suites.
 
 ---
 
-= 8. Common Pitfalls & Windows Troubleshooting
+= 9. Common Pitfalls & Windows Troubleshooting
 
-== 8.1 Port 3000 or 5432 Already in Use
+== 9.1 Port 3000 or 5432 Already in Use
 - *Symptom*: `listen EADDRINUSE: address already in use :::3000` or `bind: address already in use 0.0.0.0:5432`.
 - *Solution*: Kill the conflicting process in PowerShell:
   ```powershell
@@ -261,17 +315,17 @@ Ran all test suites.
   ```
   Or change external ports in `docker-compose.yml` (e.g., `"3001:3000"`).
 
-== 8.2 Docker Desktop WSL 2 Engine Not Running
+== 9.2 Docker Desktop WSL 2 Engine Not Running
 - *Symptom*: `error during connect: This error may indicate that the docker daemon is not running.`
 - *Solution*: Launch Docker Desktop from Start menu and wait for the whale icon to turn green. If needed, run `wsl --update` in PowerShell (Admin).
 
-== 8.3 Windows CRLF Line Endings in Shell Scripts
+== 9.3 Windows CRLF Line Endings in Shell Scripts
 - *Symptom*: `exec /app/docker-entrypoint.sh: no such file or directory` or `\r: command not found`.
 - *Solution*: Run `git config core.autocrlf false` followed by `git checkout docker-entrypoint.sh` in Git Bash.
 
 ---
 
-= 9. Daily Development Commands & Teardown
+= 10. Daily Development Commands & Teardown
 
 #table(
   columns: (1.5fr, 3fr),
@@ -282,7 +336,7 @@ Ran all test suites.
   [Stop Containers (Preserve Data)], [`docker compose stop`],
   [Restart Stopped Containers], [`docker compose start`],
   [Tail Live Application Logs], [`docker compose logs -f slotbook-app`],
-  [Tail Database Logs], [`docker compose logs -f slotbook-db`],
+  [Tail Database Logs], [`docker compose logs -f slotbook-postgres`],
   [Run Migrations Manually], [`docker compose exec slotbook-app npm run db:migrate`],
   [Re-Seed Database], [`docker compose exec slotbook-app npm run db:seed`],
   [Full Teardown (Clean Slate)], [`docker compose down -v`]
