@@ -34,9 +34,9 @@ services:
       SESSION_SECRET: slotbook_production_secure_secret_key_at_least_32_characters_long_for_session
       NODE_ENV: production
       PORT: 3000
-      GMAIL_USER: ${GMAIL_USER:-host7890123@gmail.com}
+      GMAIL_USER: ${GMAIL_USER:-your_email@gmail.com}
       GMAIL_APP_PASSWORD: ${GMAIL_APP_PASSWORD:-}
-      MAIL_FROM: ${MAIL_FROM:-host7890123@gmail.com}
+      MAIL_FROM: ${MAIL_FROM:-your_email@gmail.com}
     ports:
       - "3000:3000"
 

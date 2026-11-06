@@ -224,3 +224,41 @@ During implementation and test suite verification, several issues were identifie
 
 4. **Live SMTP & Outbox Resilience**:
    - Tested Nodemailer Gmail SMTP connection; confirmed outbox logging and graceful failure recording (`last_error` and `attempt_count`) without crashing the application.
+
+
+---
+
+## 8. Final Assessment Hardening, Architecture Documentation & Verification
+
+### A. Availability Engine & Weekly Schema Alignment
+- **Problem**: When hosts attempted to save weekly availability rules, the frontend emitted `"Request payload failed schema validation"`.
+- **Root Cause**: The React state stored times in 12-hour AM/PM format (e.g. `09:00 AM`) whereas the Zod schema and PostgreSQL `TIME` column strictly required 24-hour format (e.g. `09:00:00` or `09:00`). Additionally, weekday keys were occasionally transmitted as string values instead of integers `0` to `6`.
+- **Correction**: Aligned the form submission transformation to convert times to standard 24-hour military format before dispatching payloads, and ensured weekday numbers were strictly parsed as integers. Verified by automated tests in `tests/scheduling_and_availability.test.ts`.
+
+### B. Host Dashboard Cancellation Synchronization
+- **Problem**: When a guest cancelled an appointment via their management link, the host dashboard continued showing the booking as `CONFIRMED`, and the upcoming bookings counter did not decrement.
+- **Root Cause**: The dashboard overview API query filtered bookings with `WHERE host_id = $1` without excluding `status = 'CANCELLED'`. Additionally, the frontend overview component did not separate cancelled appointments into a dedicated history tab.
+- **Correction**: Updated `src/app/api/host/dashboard/route.ts` and `src/app/api/host/bookings/route.ts` to strictly query active confirmed bookings for upcoming counters while categorizing cancelled bookings into the historical audit list. Verified in `tests/critical_fixes.test.ts`.
+
+### C. Buffer Math & Interval Stride
+- **Problem**: Candidate slot iteration previously stepped by meeting duration alone ($D$), causing slots with buffer before and buffer after to overlap with each other.
+- **Root Cause**: Candidate slot stepping must account for the full meeting footprint: $\text{Step} = D + B_{\text{before}} + B_{\text{after}}$.
+- **Correction**: Enforced strict interval step mathematics in `src/lib/slots.ts` so that a 30m appointment with 10m before and 10m after buffers steps at 50-minute intervals (e.g. 09:10, 10:00, 10:50). Verified in `tests/scheduling_and_availability.test.ts`.
+
+### D. Assessment Presentation & Documentation Deliverables
+Generated professional, review-ready technical documentation in `docs/assessment/`:
+1. **`Slotbook_Assessment_Presentation.pptx` & `.pdf`**: 8-slide widescreen deck with 5-minute presenter narration embedded in slide notes, visual cards, and code snippets.
+2. **`Slotbook_Architecture_and_Reliability_Report.pdf`**: 9-page deep-dive architecture document compiled via Typst with ASCII/system topology diagrams, ER model, PostgreSQL GiST exclusion mechanics, outbox patterns, and empirical test evidence.
+3. **`FRESH_PC_SETUP_GUIDE.md` & `Slotbook_Fresh_PC_Setup_Guide.pdf`**: Zero-prerequisite Windows 10/11 setup guide covering Chrome, VS Code, Git for Windows, Docker Desktop with WSL 2, single-command launch, verification, and Windows-specific troubleshooting.
+4. **`README_FOR_REVIEWER.md`**: Submission guide and reviewer navigation index.
+
+### E. Full Test Suite Verification (71 Tests Passing)
+- **7 Test Suites, 71 Tests, 100% Pass Rate**:
+  - `tests/api.test.ts` (6 tests)
+  - `tests/auth_and_notification.test.ts` (10 tests)
+  - `tests/concurrency.test.ts` (3 tests — 10 parallel requests)
+  - `tests/critical_fixes.test.ts` (12 tests)
+  - `tests/scheduling_and_availability.test.ts` (18 tests)
+  - `tests/transformation.test.ts` (8 tests)
+  - `tests/workflow.test.ts` (14 tests)
+- Clean production build via `npm run build` compiling 26 static and dynamic routes with zero TypeScript errors.
