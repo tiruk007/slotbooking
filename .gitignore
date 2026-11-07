@@ -35,3 +35,4 @@ next-env.d.ts
 
 # presentation deliverables (kept locally, ignored on git)
 docs/assessment/Presentation/
+presentations/
