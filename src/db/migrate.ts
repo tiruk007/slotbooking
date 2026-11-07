@@ -1,15 +1,72 @@
 import fs from "fs";
 import path from "path";
 import { getPool } from "./index";
+import { Pool } from "pg";
 import * as dotenv from "dotenv";
 
 dotenv.config();
 
+async function ensureDatabaseExists(url: string) {
+  try {
+    const parsed = new URL(url.replace(/^postgres:/, "postgresql:"));
+    const dbName = parsed.pathname.replace(/^\//, "");
+    if (!dbName || dbName === "postgres") return;
+
+    const maintenanceDbs = ["postgres", "template1", "slotbook"];
+    for (const mDb of maintenanceDbs) {
+      if (mDb === dbName) continue;
+      try {
+        const mParsed = new URL(url.replace(/^postgres:/, "postgresql:"));
+        mParsed.pathname = `/${mDb}`;
+        const adminPool = new Pool({
+          connectionString: mParsed.toString(),
+          connectionTimeoutMillis: 4000,
+        });
+        const adminClient = await adminPool.connect();
+        try {
+          const check = await adminClient.query(
+            "SELECT 1 FROM pg_database WHERE datname = $1",
+            [dbName]
+          );
+          if (check.rowCount === 0) {
+            console.log(`Database "${dbName}" does not exist. Creating it automatically...`);
+            const cleanDbName = dbName.replace(/[^a-zA-Z0-9_]/g, "");
+            await adminClient.query(`CREATE DATABASE "${cleanDbName}"`);
+            console.log(`✓ Database "${cleanDbName}" created successfully.`);
+          }
+          return;
+        } finally {
+          adminClient.release();
+          await adminPool.end();
+        }
+      } catch {
+        // Try next maintenance db
+      }
+    }
+  } catch {
+    // If URL parsing fails, ignore and proceed
+  }
+}
+
 export async function runMigrations(customUrl?: string) {
   const url = customUrl || process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/slotbook";
   console.log(`Running migrations against: ${url.replace(/:[^:@]+@/, ":***@")}`);
-  const pool = getPool(url);
-  const client = await pool.connect();
+
+  let pool = getPool(url);
+  let client;
+
+  try {
+    client = await pool.connect();
+  } catch (err: any) {
+    if (err?.code === "3D000" || err?.message?.includes("does not exist")) {
+      await pool.end();
+      await ensureDatabaseExists(url);
+      pool = getPool(url);
+      client = await pool.connect();
+    } else {
+      throw err;
+    }
+  }
 
   try {
     const migrationsDir = path.join(__dirname, "migrations");
